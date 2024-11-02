@@ -75,7 +75,6 @@ export class P2PClient extends EventEmitter {
     return result;
   }
   async askToConnection(conn: Connection, protocol: string): Promise<string> {
-    const signal = AbortSignal.timeout(5000);
     const stream = await conn.newStream(protocol);
     const result = await pipe(stream, async (source) => {
       let output = "";

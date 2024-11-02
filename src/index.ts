@@ -1,7 +1,6 @@
 import { P2PClient, ConnectionOpenEvent } from "./p2p-сlient.js";
-import packageJson from "../package.json";
+//import packageJson from "../package.json";
 import { multiaddr } from "@multiformats/multiaddr";
-import type { Connection, PeerId } from "@libp2p/interface";
 
 const RELAY_PEER: string =
   "12D3KooWKQ8DqitPP7ivNFn8QJtA6K3fa8Zsd4M7ea8CFjqxQQcr";

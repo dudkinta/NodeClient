@@ -6,7 +6,7 @@
       "request": "launch",
       "name": "Launch Program",
       "skipFiles": ["<node_internals>/**"],
-      "program": "${workspaceFolder}/src/index.ts",
+      "program": "${workspaceFolder}/dist/index.js",
       "runtimeArgs": ["--inspect"],
       "preLaunchTask": "tsc: build",
       "outFiles": ["${workspaceFolder}/dist/**/*.js"],
