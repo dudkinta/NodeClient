@@ -1,4 +1,6 @@
-import { createLibp2p } from "libp2p";
+import { EventEmitter } from "events";
+import { createLibp2p, Libp2p } from "libp2p";
+import type { Connection, PeerId } from "@libp2p/interface";
 import { ping } from "@libp2p/ping";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
@@ -6,29 +8,26 @@ import { tcp } from "@libp2p/tcp";
 import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { kadDHT, removePrivateAddressesMapper } from "@libp2p/kad-dht";
 import { identify, identifyPush } from "@libp2p/identify";
-import { multiaddr } from "@multiformats/multiaddr";
+import { Multiaddr } from "@multiformats/multiaddr";
 import { protocolGrouper } from "@tgbc/protocol-grouper";
 import { byteStream } from "it-byte-stream";
 import { toString } from "uint8arrays";
-//import { pipe } from 'it-pipe';
-//const packageJson = await import('../package.json', {
-//  assert: { type: 'json' },
-//});
-//import { PeerInfo } from './models/peerInfo.js';
+import { pipe } from "it-pipe";
 
-export class P2PClient {
-  chatPeers: Set<string> = new Set();
+export interface ConnectionOpenEvent {
+  peerId: PeerId;
+  conn: Connection;
+}
+
+export class P2PClient extends EventEmitter {
   #node: any = null;
-  #localPeer: any = null;
-  #multiADDRS: any = null;
-  #relayPeer: any = null;
   #CHAT_PROTOCOL: string = "/chat/1.0.0";
 
-  constructor(rAdress: string, rPort: number, rPeer: string) {
-    this.#multiADDRS = multiaddr(`/ip4/${rAdress}/tcp/${rPort}/p2p/${rPeer}`);
+  constructor() {
+    super();
   }
 
-  async #createNode(): Promise<any> {
+  async #createNode(): Promise<Libp2p> {
     const node = await createLibp2p({
       start: true,
       addresses: {
@@ -58,35 +57,39 @@ export class P2PClient {
     return node;
   }
 
-  async #connectToMA(ma: any): Promise<any> {
-    console.log(`Dialing '${ma}'`);
+  async connectTo(ma: Multiaddr): Promise<void> {
     const signal = AbortSignal.timeout(5000);
-    try {
-      const connection = await this.#node.dial(ma, { signal });
-      return connection.remotePeer;
-    } catch (err: any) {
-      if (signal.aborted) {
-        console.log(`Timed out connecting to '${ma}'`);
-      } else {
-        console.log(`Connecting to '${ma}' failed - ${err.message}`);
-      }
-    }
+    await this.#node.dial(ma, signal);
   }
 
-  async #getMultiaddrrs(peerId: any): Promise<void> {
-    try {
-      // Используем DHT для поиска адресов по PeerId
-      const peerInfo = await this.#node.contentRouting.findPeer(peerId);
-
-      if (peerInfo && peerInfo.multiaddrs.length > 0) {
-        // Используем первый найденный многоадрес для подключения
-        const connection = await this.#node.dial(peerInfo.multiaddrs[0]);
-        console.log(`Подключен к пир с PeerId ${peerId.toString()}`);
-      } else {
-        console.log(
-          `Не удалось найти многоадрес для PeerId ${peerId.toString()}`
-        );
+  async askToPeer(ma: Multiaddr, protocol: string): Promise<string> {
+    const signal = AbortSignal.timeout(5000);
+    const stream = await this.#node.dialProtocol(ma, protocol, signal);
+    const result = await pipe(stream, async (source) => {
+      let output = "";
+      for await (const buf of source) {
+        output += toString(buf.subarray());
       }
+      return output;
+    });
+    return result;
+  }
+  async askToConnection(conn: Connection, protocol: string): Promise<string> {
+    const signal = AbortSignal.timeout(5000);
+    const stream = await conn.newStream(protocol);
+    const result = await pipe(stream, async (source) => {
+      let output = "";
+      for await (const buf of source) {
+        output += toString(buf.subarray());
+      }
+      return output;
+    });
+    return result;
+  }
+  async getMultiaddrrs(peerId: PeerId): Promise<void> {
+    try {
+      const peerInfo = await this.#node.contentRouting.findPeer(peerId);
+      return peerInfo.multiaddrs;
     } catch (err: any) {
       console.error(`Ошибка при поиске пира в DHT: ${err.message}`);
     }
@@ -94,58 +97,20 @@ export class P2PClient {
 
   async startNode(): Promise<void> {
     this.#node = await this.#createNode();
-    this.#localPeer = this.#node.peerId;
-    console.log("Local peer ID:", this.#localPeer.toString());
+    const localPeer = this.#node.peerId;
+    console.log("Local peer ID:", localPeer.toString());
 
     this.#node.addEventListener("connection:open", (event: any) => {
-      const connection = event.detail;
-      if (connection) {
-        const peerId = connection.remotePeer;
-        if (peerId) {
-          console.log(
-            `[${new Date().toISOString()}] EVENT: Connection open to peer:', ${peerId.toString()}`
-          );
-
-          //this.#addConnection(peerId, connection);
-
-          console.log(
-            `[${new Date().toISOString()}] EVENT: Connection opened to peer:', ${peerId}`
-          );
-        }
-      }
-    });
-    this.#node.addEventListener("protocolGrouper:add", (event: any) => {
-      const { peerId, protocol } = event.detail;
-      if (protocol === this.#CHAT_PROTOCOL) {
-        console.log(
-          `[${new Date().toISOString()}] EVENT: protocolGrouper add protocol: ${protocol} ${peerId}`
-        );
-        const chatPeers = this.#node.services.protocolGrouper.getPeers(
-          this.#CHAT_PROTOCOL
-        );
-        chatPeers.forEach((peer: any) => this.chatPeers.add(peer));
-        /*chatPeers.map((peer) => {
-          this.#node.peerStore.get(peer).then(peerInfo => {
-            console.log(`Peer info:`, peerInfo);
-          }).catch(err => {
-            console.error(`Ошибка получения информации о пире ${peer.toString()}:`, err);
-          });
-        });*/
-      }
+      const conn: Connection = event.detail;
+      const peerId: PeerId = conn.remotePeer;
+      this.emit("connection:open", { peerId, conn });
     });
     this.#node.addEventListener("peer:connect", (event: any) => {
       const peerId = event.detail;
-      //this.#addPeerId(peerId);
-      console.log(
-        `[${new Date().toISOString()}] EVENT: Connected to peer:', ${peerId.toString()}`
-      );
-    });
-    this.#node.addEventListener("peer:disconnect", (event: any) => {
-      const peerId = event.detail;
-      //this.#disconnectPeer(peerId);
-      console.log(
-        `[${new Date().toISOString()}] EVENT: Disconnected peer:', ${peerId.toString()}`
-      );
+      if (peerId) {
+        console.log(`Connected to peer: ${peerId}`);
+        this.emit("peer:connect", peerId);
+      }
     });
     this.#node.addEventListener("error", (err: any) => {
       console.error("Libp2p node error:", err);
@@ -167,37 +132,15 @@ export class P2PClient {
 
     try {
       await this.#node.start();
-      //console.log(this.#node.peerStore);
-
-      /*const addrs = this.#node.getMultiaddrs();
-      if (addrs.length === 0) {
-        console.warn(
-          'No addresses are being returned by node.getMultiaddrs().',
-        );
-      } else {
-        console.info(addrs.map((ma) => ma.toString()).join('\n'));
-      }*/
-      this.#relayPeer = await this.#connectToMA(this.#multiADDRS);
-      const peerData = await this.#node.peerStore.get(this.#localPeer);
-      if (peerData.protocols) {
-        console.log("Поддерживаемые протоколы:", peerData.protocols);
-      } else {
-        console.log("Информация о протоколах не найдена.");
-      }
-      console.log("Relay peer ID:", this.#relayPeer.toString());
     } catch (err: any) {
-      throw new Error(`Error on start client node - ${err.message}`);
+      throw new Error(`Error on start client node - ${err}`);
     }
   }
 
-  /*connectToPeer(peer) {
-    this.peers.push(peer);
+  isPeerConnected(peerId: PeerId): boolean {
+    const connections = this.#node.getConnections();
+    return connections.some((conn: Connection) =>
+      conn.remotePeer.equals(peerId)
+    );
   }
-
-  broadcast(data) {
-    this.peers.forEach((peer) => {
-      peer.send(data);
-    });
-  }*/
 }
-//export default P2PClient;

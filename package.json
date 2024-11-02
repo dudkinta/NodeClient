@@ -4,7 +4,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "npm run build && node --inspect --loader ts-node/esm ./src/index.ts",
+    "start": "npm run build && node --loader ts-node/esm ./src/index.ts",
     "build": "npx tsc",
     "serve": "node dist/index.js"
   },
