@@ -11,8 +11,9 @@ import { identify, identifyPush } from "@libp2p/identify";
 import { Multiaddr } from "@multiformats/multiaddr";
 import { protocolGrouper } from "@tgbc/protocol-grouper";
 import { byteStream } from "it-byte-stream";
-import { toString } from "uint8arrays";
+import { toString, fromString } from "uint8arrays";
 import { pipe } from "it-pipe";
+import config from "./config.json" assert { type: "json" };
 
 export interface ConnectionOpenEvent {
   peerId: PeerId;
@@ -20,14 +21,13 @@ export interface ConnectionOpenEvent {
 }
 
 export class P2PClient extends EventEmitter {
-  #node: any = null;
-  #CHAT_PROTOCOL: string = "/chat/1.0.0";
-
+  private node: any = null;
+  localPeer: string | undefined;
   constructor() {
     super();
   }
 
-  async #createNode(): Promise<Libp2p> {
+  private async createNode(): Promise<Libp2p> {
     const node = await createLibp2p({
       start: true,
       addresses: {
@@ -38,6 +38,7 @@ export class P2PClient extends EventEmitter {
         ],
       },
       transports: [tcp(), circuitRelayTransport()],
+
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       services: {
@@ -51,7 +52,7 @@ export class P2PClient extends EventEmitter {
         protocolGrouper: protocolGrouper(),
       },
       connectionManager: {
-        maxConnections: 100,
+        maxConnections: 20,
       },
     });
     return node;
@@ -59,12 +60,12 @@ export class P2PClient extends EventEmitter {
 
   async connectTo(ma: Multiaddr): Promise<void> {
     const signal = AbortSignal.timeout(5000);
-    await this.#node.dial(ma, signal);
+    await this.node.dial(ma, signal);
   }
 
   async askToPeer(ma: Multiaddr, protocol: string): Promise<string> {
     const signal = AbortSignal.timeout(5000);
-    const stream = await this.#node.dialProtocol(ma, protocol, signal);
+    const stream = await this.node.dialProtocol(ma, protocol, signal);
     const result = await pipe(stream, async (source) => {
       let output = "";
       for await (const buf of source) {
@@ -85,38 +86,55 @@ export class P2PClient extends EventEmitter {
     });
     return result;
   }
-  async getMultiaddrrs(peerId: PeerId): Promise<void> {
-    try {
-      const peerInfo = await this.#node.contentRouting.findPeer(peerId);
-      return peerInfo.multiaddrs;
-    } catch (err: any) {
-      console.error(`Ошибка при поиске пира в DHT: ${err.message}`);
+  async getMultiaddrrs(peerId: PeerId): Promise<Multiaddr[] | undefined> {
+    if (!this.node.peerRouting) {
+      console.error("PeerRouting not found");
+      return undefined;
     }
+    const peerInfo = await this.node.peerRouting.findPeer(peerId);
+    if (peerInfo) {
+      return peerInfo.multiaddrs;
+    }
+    return undefined;
   }
 
   async startNode(): Promise<void> {
-    this.#node = await this.#createNode();
-    const localPeer = this.#node.peerId;
+    this.node = await this.createNode();
+    const localPeer = this.node.peerId;
     console.log("Local peer ID:", localPeer.toString());
-
-    this.#node.addEventListener("connection:open", (event: any) => {
+    this.localPeer = localPeer.toString();
+    this.node.addEventListener("connection:open", (event: any) => {
       const conn: Connection = event.detail;
       const peerId: PeerId = conn.remotePeer;
       this.emit("connection:open", { peerId, conn });
     });
-    this.#node.addEventListener("peer:connect", (event: any) => {
+    this.node.addEventListener("connection:close", (event: any) => {
+      const conn: Connection = event.detail;
+      const peerId: PeerId = conn.remotePeer;
+      this.emit("connection:close", { peerId, conn });
+    });
+    this.node.addEventListener("peer:connect", (event: any) => {
       const peerId = event.detail;
       if (peerId) {
-        console.log(`Connected to peer: ${peerId}`);
         this.emit("peer:connect", peerId);
       }
     });
-    this.#node.addEventListener("error", (err: any) => {
+    this.node.addEventListener("peer:disconnect", (event: any) => {
+      const peerId = event.detail;
+      if (peerId) {
+        this.emit("peer:disconnect", peerId);
+      }
+    });
+    this.node.addEventListener("protocolGrouper:add", (event: any) => {
+      const { protocol, peerId } = event.detail;
+      this.emit("protocolGrouper:add", { protocol, peerId });
+    });
+    this.node.addEventListener("error", (err: any) => {
       console.error("Libp2p node error:", err);
     });
 
-    this.#node.handle(
-      this.#CHAT_PROTOCOL,
+    this.node.handle(
+      config.protocols.CHAT,
       async ({ stream, connection }: any) => {
         const peerId = connection.remotePeer;
         console.log(`Received message from peer: ${peerId.toString()}`);
@@ -128,16 +146,30 @@ export class P2PClient extends EventEmitter {
         }
       }
     );
+    this.node.handle(config.protocols.ROLE, async ({ stream }: any) => {
+      const ROLES = [config.roles.NODE];
+      await pipe([fromString(JSON.stringify(ROLES))], stream);
+    });
+    this.node.handle(config.protocols.PING, async ({ stream }: any) => {
+      await pipe([fromString("PONG")], stream);
+    });
+    this.node.handle(config.protocols.PEER_LIST, async ({ stream }: any) => {
+      const connections = this.node.getConnections();
+      const peerIds = connections.map((conn: any) =>
+        conn.remotePeer.toString()
+      );
 
+      await pipe([fromString(JSON.stringify(peerIds))], stream);
+    });
     try {
-      await this.#node.start();
+      await this.node.start();
     } catch (err: any) {
       throw new Error(`Error on start client node - ${err}`);
     }
   }
 
   isPeerConnected(peerId: PeerId): boolean {
-    const connections = this.#node.getConnections();
+    const connections = this.node.getConnections();
     return connections.some((conn: Connection) =>
       conn.remotePeer.equals(peerId)
     );

@@ -1,0 +1,19 @@
+{
+  "protocols": {
+    "ROLE": "/chain/roles/1.0.0",
+    "PEER_LIST": "/chain/peers/1.0.0",
+    "CHAT": "/chain/chat/1.0.0",
+    "PING": "/chain/ping/1.0.0"
+  },
+  "roles": {
+    "RELAY": "chainrelay",
+    "NODE": "node"
+  },
+  "relay": [
+    {
+      "PEER": "12D3KooWKQ8DqitPP7ivNFn8QJtA6K3fa8Zsd4M7ea8CFjqxQQcr",
+      "ADDRESS": "31.172.66.148",
+      "PORT": 6006
+    }
+  ]
+}
