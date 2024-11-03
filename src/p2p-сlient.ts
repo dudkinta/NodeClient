@@ -4,11 +4,10 @@ import type { Connection, PeerId, PeerInfo } from "@libp2p/interface";
 import { ping } from "@libp2p/ping";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
-import { tcp } from "@libp2p/tcp";
-import {
-  circuitRelayServer,
-  circuitRelayTransport,
-} from "@libp2p/circuit-relay-v2";
+import { webRTC } from "@libp2p/webrtc";
+import { webSockets } from "@libp2p/websockets";
+import * as filters from "@libp2p/websockets/filters";
+import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { kadDHT, removePrivateAddressesMapper } from "@libp2p/kad-dht";
 import { identify, identifyPush } from "@libp2p/identify";
 import { Multiaddr } from "@multiformats/multiaddr";
@@ -35,13 +34,23 @@ export class P2PClient extends EventEmitter {
       start: true,
       addresses: {
         listen: [
-          "/ip4/0.0.0.0/tcp/0", // IPv4 TCP, случайный порт
-          "/ip6/::/tcp/0", // IPv6 TCP, случайный порт
+          "/ip4/0.0.0.0/tcp/0/ws", // IPv4 TCP, случайный порт
+          "/ip6/::/tcp/0/ws", // IPv6 TCP, случайный порт
           "/p2p-circuit", // Relay
         ],
       },
-      transports: [tcp(), circuitRelayTransport()],
-
+      transports: [
+        webSockets({
+          filter: filters.all,
+        }),
+        webRTC(),
+        circuitRelayTransport(),
+      ],
+      connectionGater: {
+        denyDialMultiaddr: () => {
+          return false;
+        },
+      },
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       services: {
@@ -122,7 +131,64 @@ export class P2PClient extends EventEmitter {
       return "";
     }
   }
+  async askToPeer2(
+    ma: Multiaddr,
+    protocol: string,
+    message: string
+  ): Promise<string> {
+    let stream: any;
+    try {
+      // Создание нового потока с таймаутом
+      const signal = AbortSignal.timeout(5000);
+      stream = await this.node.dialProtocol(ma, protocol, signal);
 
+      // Отправляем сообщение
+      await pipe(
+        [fromString(message)], // Сообщение, которое хотим отправить
+        stream.sink // Запись в поток
+      );
+
+      // Читаем ответ
+      const result = await pipe(
+        stream, // Входной поток
+        async function (source) {
+          let output = "";
+          for await (const buf of source) {
+            output += toString(buf.subarray());
+          }
+          return output;
+        },
+        async function (result) {
+          if (stream && stream.close) {
+            try {
+              await stream.close(); // Закрытие потока после использования
+            } catch (err) {
+              console.error(
+                `Error closing stream. Multiaddr: ${ma.toString()}. Error: ${err}`
+              );
+            }
+          }
+          return result;
+        }
+      );
+
+      return result;
+    } catch (err) {
+      console.error(
+        `Error on askToPeer. Multiaddr: ${ma.toString()}. Protocol: ${protocol}. Error: ${err}`
+      );
+      if (stream && stream.close) {
+        try {
+          await stream.close(); // Закрытие потока в случае ошибки
+        } catch (closeErr) {
+          console.error(
+            `Error closing stream. Multiaddr: ${ma.toString()}. Error: ${closeErr}`
+          );
+        }
+      }
+      return "";
+    }
+  }
   async askToConnection(conn: Connection, protocol: string): Promise<string> {
     let stream: any;
     try {

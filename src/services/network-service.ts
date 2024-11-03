@@ -68,7 +68,8 @@ export class NetworkService extends EventEmitter {
       }
     });
     const relay = config.relay[0];
-    const address = `/ip4/${relay.ADDRESS}/tcp/${relay.PORT}/p2p/${relay.PEER}`;
+    const address = `/ip4/${relay.ADDRESS}/tcp/${relay.PORT}/ws/p2p/${relay.PEER}`;
+    console.log("Connect to relay", address);
     const ma = multiaddr(address);
     await this.client.connectTo(ma);
     this.startAnalizers();
@@ -129,7 +130,7 @@ export class NetworkService extends EventEmitter {
           if (!node.peers.has(peerId)) {
             if (node.protocols.has(config.protocols.CIRCUIT_HOP)) {
               const relayAddress = node.connection!.remoteAddr.toString();
-              const fullAddress = `${relayAddress}/p2p-circuit/p2p/${peerId}`;
+              const fullAddress = `${relayAddress}/p2p-circuit/webrtc/p2p/${peerId}`;
               node.peers.set(peerId, fullAddress);
             }
           }
@@ -164,11 +165,18 @@ export class NetworkService extends EventEmitter {
         this.taskQueue.push(async () => {
           if (node.addresses.size > 0) {
             const ma = multiaddr(node.addresses.values().next().value);
+            /*console.log("Try connect to", ma.toString());
+            const connect = await this.client.connectTo(ma);
+            if (!connect) {
+              return;
+            }
+            console.log("Connecting return:", connect);*/
             const roleList = await this.client.askToPeer(
               ma,
               config.protocols.ROLE
             );
             const roles: string[] = JSON.parse(roleList);
+            console.log("Roles:", roles);
             roles.forEach((role) => {
               if (!node.roles.has(role)) {
                 node.roles.add(role);
@@ -180,6 +188,7 @@ export class NetworkService extends EventEmitter {
               config.protocols.MULTIADDRES
             );
             const multiaddrrs: string[] = JSON.parse(multiAddrList);
+            console.log("Multiaddrs:", multiaddrrs);
             multiaddrrs.forEach((ma) => {
               if (!node.addresses.has(ma)) {
                 node.addresses.add(ma);
