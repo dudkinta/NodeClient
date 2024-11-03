@@ -1,19 +1,25 @@
 import { EventEmitter } from "events";
+import { peerIdFromString } from "@libp2p/peer-id";
 import config from "./../config.json" assert { type: "json" };
 import { P2PClient, ConnectionOpenEvent } from "./../p2p-сlient.js";
+import type { Connection } from "@libp2p/interface";
 import { multiaddr } from "@multiformats/multiaddr";
 import { Node } from "./../models/node.js";
 import { isLocal } from "../helpers/check-ip.js";
+import Queue from "queue";
 
 export class NetworkService extends EventEmitter {
   private client: P2PClient;
   private nodes: Map<string, Node>;
   private localPeer: string | undefined;
-
+  private taskQueue: Queue;
   constructor(p2pClient: P2PClient) {
     super();
     this.client = p2pClient;
     this.nodes = new Map<string, Node>();
+    this.taskQueue = new Queue();
+    this.taskQueue.autostart = true;
+    this.taskQueue.concurrency = 1;
   }
 
   async startAsync(): Promise<void> {
@@ -31,29 +37,22 @@ export class NetworkService extends EventEmitter {
         node.peerId = peerId;
         node.connection = conn;
       }
-      try {
-        this.client
-          .askToConnection(conn, config.protocols.ROLE)
-          .then((result) => {
-            const roleList: string[] = JSON.parse(result);
-            roleList.forEach((role) => {
-              node.roles.add(role);
-            });
-          });
-      } catch (error) {}
-      try {
-        this.client
-          .askToConnection(conn, config.protocols.PEER_LIST)
-          .then((result) => {
-            const peerList: string[] = JSON.parse(result);
-            peerList.forEach((peer) => {
-              node.peers.add(peer);
-            });
-          });
-      } catch (error) {}
+
       node.isConnect = true;
       this.nodes.set(peerId.toString(), node);
       console.log("New connection:", node);
+    });
+    this.client.on("connection:close", (event) => {
+      const { peerId } = event;
+      if (peerId.toString() === this.localPeer) return;
+
+      const node = this.nodes.get(peerId.toString());
+      if (node) {
+        node.peerId = peerId;
+        node.connection = undefined;
+        node.isConnect = false;
+        node.peers.clear();
+      }
     });
     this.client.on("protocolGrouper:add", (event) => {
       const { protocol, peerId } = event;
@@ -77,30 +76,122 @@ export class NetworkService extends EventEmitter {
 
   private startAnalizers(): void {
     setInterval(() => {
-      this.addressedAnalizer();
-    }, 60e3);
+      this.addressedAndRolesAnalizer();
+    }, 10e3);
     setInterval(async () => {
-      await this.connectingAnalizer();
+      this.discoveryAnalizr();
+    }, 10e3);
+    setInterval(async () => {
+      this.connectingAnalizer();
+    }, 10e3);
+    setInterval(() => {
+      this.createEmptyPeers();
     }, 10e3);
   }
 
-  private async discoveryAnalizer(): Promise<void> {}
+  private createEmptyPeers(): void {
+    for (const nodePair of this.nodes) {
+      const node = nodePair[1];
+      if (node.peers.size == 0) continue;
 
-  private addressedAnalizer(): void {
-    this.nodes.forEach((node) => {
-      if (!node.peerId) return;
+      for (const peerContact of node.peers) {
+        if (peerContact[0] === this.localPeer) continue;
 
-      this.client.getMultiaddrrs(node.peerId!).then((multiaddrs) => {
-        if (multiaddrs) {
-          let addresses = multiaddrs.map((ma) => ma.toString());
-          node.addresses = new Set(addresses);
+        if (!this.nodes.has(peerContact[0])) {
+          console.log("Create peer from nodePeers", peerContact[0]);
+          let peerId = peerIdFromString(peerContact[0]);
+          const node = new Node(peerId);
+          node.addresses = new Set();
+          node.addresses.add(peerContact[1]);
+          this.nodes.set(peerContact[0], node);
+          /*this.taskQueue.push(async () => {
+            console.log("Find empty peer", peerId);
+            const peerInfo = await this.client.findPeer(peerId);
+          });*/
         }
-      });
-    });
+      }
+    }
   }
 
-  private async connectingAnalizer(): Promise<void> {
-    const tasks: Promise<void>[] = [];
+  private discoveryAnalizr(): void {
+    for (const nodePair of this.nodes) {
+      const node = nodePair[1];
+      if (!node.peerId || !node.connection) continue;
+
+      this.taskQueue.push(async () => {
+        const peerList = await this.client.askToConnection(
+          node.connection!,
+          config.protocols.PEER_LIST
+        );
+        const peerInfoList: any[] = JSON.parse(peerList);
+        peerInfoList.forEach((peerInfo) => {
+          const { peerId, address } = peerInfo;
+          if (!node.peers.has(peerId)) {
+            if (node.protocols.has(config.protocols.CIRCUIT_HOP)) {
+              const relayAddress = node.connection!.remoteAddr.toString();
+              const fullAddress = `${relayAddress}/p2p-circuit/p2p/${peerId}`;
+              node.peers.set(peerId, fullAddress);
+            }
+          }
+        });
+      });
+    }
+  }
+
+  private addressedAndRolesAnalizer(): void {
+    for (const nodePair of this.nodes) {
+      const node = nodePair[1];
+      if (!node.peerId) {
+        continue;
+      }
+
+      if (node.isConnect) {
+        if (node.roles.size === 0) {
+          this.taskQueue.push(async () => {
+            const roleList = await this.client.askToConnection(
+              node.connection!,
+              config.protocols.ROLE
+            );
+            const roles: string[] = JSON.parse(roleList);
+            roles.forEach((role) => {
+              if (!node.roles.has(role)) {
+                node.roles.add(role);
+              }
+            });
+          });
+        }
+      } else {
+        this.taskQueue.push(async () => {
+          if (node.addresses.size > 0) {
+            const ma = multiaddr(node.addresses.values().next().value);
+            const roleList = await this.client.askToPeer(
+              ma,
+              config.protocols.ROLE
+            );
+            const roles: string[] = JSON.parse(roleList);
+            roles.forEach((role) => {
+              if (!node.roles.has(role)) {
+                node.roles.add(role);
+              }
+            });
+
+            const multiAddrList = await this.client.askToPeer(
+              ma,
+              config.protocols.MULTIADDRES
+            );
+            const multiaddrrs: string[] = JSON.parse(multiAddrList);
+            multiaddrrs.forEach((ma) => {
+              if (!node.addresses.has(ma)) {
+                node.addresses.add(ma);
+              }
+            });
+          }
+        });
+      }
+    }
+  }
+
+  private connectingAnalizer(): void {
     const relayCount = Array.from(this.nodes.values()).filter(
       (n) => n.roles.has(config.roles.RELAY) && n.isConnect
     ).length;
@@ -112,36 +203,45 @@ export class NetworkService extends EventEmitter {
       const node = nodePair[1];
       if (!node.peerId) continue;
 
-      tasks.push(
-        (async () => {
-          if (!node.isConnect) {
-            if (
-              relayCount === 0 &&
-              nodeCount === 0 &&
-              node.roles.has(config.roles.RELAY)
-            ) {
-              await this.tryConnectNode(node);
-            } else if (nodeCount < 20 && node.roles.has(config.roles.NODE)) {
-              await this.tryConnectNode(node);
-            }
-          }
+      if (!node.isConnect) {
+        this.taskQueue.push(async () => {
+          const conection = await this.tryConnectNode(node);
+          node.connection = conection;
+        });
+      }
 
-          if (node.isConnect && node.protocols.has(config.protocols.PING)) {
-            await this.trySendPing(node);
-          }
-        })()
-      );
+      if (node.isConnect && node.protocols.has(config.protocols.PING)) {
+        this.taskQueue.push(async () => {
+          await this.trySendPing(node);
+        });
+      }
     }
-    await Promise.all(tasks);
   }
 
-  private async tryConnectNode(node: Node): Promise<void> {
-    if (node.addresses.size > 0) {
-      const multiaddrs = Array.from(node.addresses).map((a) => multiaddr(a));
-      const filteredAddrs = multiaddrs.filter((ma) => !isLocal(ma));
-      if (filteredAddrs.length > 0) {
-        this.client.connectTo(filteredAddrs[0]);
+  private async tryConnectNode(node: Node): Promise<Connection | undefined> {
+    try {
+      if (node.addresses.size > 0) {
+        const multiaddrs = Array.from(node.addresses).map((a) => multiaddr(a));
+        const filteredAddrs = multiaddrs.filter((ma) => !isLocal(ma));
+        if (filteredAddrs.length > 0) {
+          console.log(
+            `Try connect to ${node.peerId?.toString()} with address ${filteredAddrs[0].toString()}`
+          );
+          const connect = await this.client.connectTo(filteredAddrs[0]);
+          if (connect) {
+            node.connection = connect;
+            node.isConnect = true;
+            console.log(`Connected success to ${node.peerId?.toString()}`);
+            return connect;
+          }
+        } else {
+          console.log(`All addresses are local for ${node.peerId?.toString()}`);
+        }
       }
+      return undefined;
+    } catch (error) {
+      console.error("Error in tryConnectNode", error);
+      return undefined;
     }
   }
 
@@ -149,16 +249,20 @@ export class NetworkService extends EventEmitter {
     if (!node.connection) return;
 
     try {
-      console.log("Send Ping ", node.peerId?.toString());
       const startTime = Date.now();
 
-      this.client
-        .askToConnection(node.connection, config.protocols.PING)
-        .then((result) => {
-          console.log(
-            `Ping node ${node.peerId?.toString()} ${result == "PONG" ? "success" : "fail"} (${Date.now() - startTime} ms)`
-          );
-        });
-    } catch (error) {}
+      const result = await this.client.askToConnection(
+        node.connection,
+        config.protocols.PING
+      );
+      const isPingSuccess = result === "PONG";
+      if (!isPingSuccess) {
+        console.log(
+          `Ping node ${node.peerId?.toString()} ${isPingSuccess ? "success" : "fail"} (${Date.now() - startTime} ms)`
+        );
+      }
+    } catch (error) {
+      console.error("Error in trySendPing", error);
+    }
   }
 }

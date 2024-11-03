@@ -1,11 +1,14 @@
 import { EventEmitter } from "events";
 import { createLibp2p, Libp2p } from "libp2p";
-import type { Connection, PeerId } from "@libp2p/interface";
+import type { Connection, PeerId, PeerInfo } from "@libp2p/interface";
 import { ping } from "@libp2p/ping";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { tcp } from "@libp2p/tcp";
-import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
+import {
+  circuitRelayServer,
+  circuitRelayTransport,
+} from "@libp2p/circuit-relay-v2";
 import { kadDHT, removePrivateAddressesMapper } from "@libp2p/kad-dht";
 import { identify, identifyPush } from "@libp2p/identify";
 import { Multiaddr } from "@multiformats/multiaddr";
@@ -43,6 +46,7 @@ export class P2PClient extends EventEmitter {
       streamMuxers: [yamux()],
       services: {
         aminoDHT: kadDHT({
+          clientMode: true,
           protocol: "/ipfs/kad/1.0.0",
           peerInfoMapper: removePrivateAddressesMapper,
         }),
@@ -58,34 +62,103 @@ export class P2PClient extends EventEmitter {
     return node;
   }
 
-  async connectTo(ma: Multiaddr): Promise<void> {
+  async connectTo(ma: Multiaddr): Promise<Connection | undefined> {
     const signal = AbortSignal.timeout(5000);
-    await this.node.dial(ma, signal);
+    try {
+      return await this.node.dial(ma, signal);
+    } catch (err) {
+      console.error(
+        `Error on connectTo. Multiaddr: ${ma.toString()}. Error: ${err}`
+      );
+      return undefined;
+    }
   }
 
   async askToPeer(ma: Multiaddr, protocol: string): Promise<string> {
-    const signal = AbortSignal.timeout(5000);
-    const stream = await this.node.dialProtocol(ma, protocol, signal);
-    const result = await pipe(stream, async (source) => {
-      let output = "";
-      for await (const buf of source) {
-        output += toString(buf.subarray());
+    let stream: any;
+    try {
+      // Создание нового потока с таймаутом
+      const signal = AbortSignal.timeout(5000);
+      stream = await this.node.dialProtocol(ma, protocol, signal);
+
+      // Используем pipe для обработки потока и гарантируем его закрытие
+      const result = await pipe(
+        stream, // Входной поток
+        async function (source) {
+          let output = "";
+          for await (const buf of source) {
+            output += toString(buf.subarray());
+          }
+          return output;
+        },
+        async function (result) {
+          if (stream && stream.close) {
+            try {
+              await stream.close(); // Закрытие потока после использования
+            } catch (err) {
+              console.error(
+                `Error closing stream. Multiaddr: ${ma.toString()}. Error: ${err}`
+              );
+            }
+          }
+          return result;
+        }
+      );
+
+      return result;
+    } catch (err) {
+      console.error(
+        `Error on askToPeer. Multiaddr: ${ma.toString()}. Protocol: ${protocol}. Error: ${err}`
+      );
+      if (stream && stream.close) {
+        try {
+          await stream.close(); // Закрытие потока в случае ошибки
+        } catch (closeErr) {
+          console.error(
+            `Error closing stream. Multiaddr: ${ma.toString()}. Error: ${closeErr}`
+          );
+        }
       }
-      return output;
-    });
-    return result;
+      return "";
+    }
   }
+
   async askToConnection(conn: Connection, protocol: string): Promise<string> {
-    const stream = await conn.newStream(protocol);
-    const result = await pipe(stream, async (source) => {
-      let output = "";
-      for await (const buf of source) {
-        output += toString(buf.subarray());
+    let stream: any;
+    try {
+      // Создание нового потока
+      stream = await conn.newStream(protocol);
+
+      // Работа с потоком через pipe
+      const result = await pipe(stream, async (source) => {
+        let output = "";
+        for await (const buf of source) {
+          output += toString(buf.subarray());
+        }
+        return output;
+      });
+
+      return result;
+    } catch (err) {
+      // Логирование ошибки
+      console.error(
+        `Error on askToConnection. PeerId: ${conn.remotePeer.toString()}. Protocol: ${protocol}. Error: ${err}`
+      );
+      return "";
+    } finally {
+      // Гарантированное закрытие потока
+      if (stream && stream.close) {
+        try {
+          await stream.close(); // Закрытие потока
+        } catch (closeErr) {
+          console.error(
+            `Error closing stream. PeerId: ${conn.remotePeer.toString()}. Error: ${closeErr}`
+          );
+        }
       }
-      return output;
-    });
-    return result;
+    }
   }
+
   async getMultiaddrrs(peerId: PeerId): Promise<Multiaddr[] | undefined> {
     if (!this.node.peerRouting) {
       console.error("PeerRouting not found");
@@ -153,6 +226,12 @@ export class P2PClient extends EventEmitter {
     this.node.handle(config.protocols.PING, async ({ stream }: any) => {
       await pipe([fromString("PONG")], stream);
     });
+    this.node.handle(config.protocols.MULTIADDRES, async ({ stream }: any) => {
+      const multiaddrs = this.node
+        .getMultiaddrs()
+        .map((ma: Multiaddr) => ma.toString());
+      await pipe([fromString(JSON.stringify(multiaddrs))], stream);
+    });
     this.node.handle(config.protocols.PEER_LIST, async ({ stream }: any) => {
       const connections = this.node.getConnections();
       const peerIds = connections.map((conn: any) =>
@@ -167,7 +246,13 @@ export class P2PClient extends EventEmitter {
       throw new Error(`Error on start client node - ${err}`);
     }
   }
-
+  async findPeer(peer: PeerId): Promise<PeerInfo | undefined> {
+    try {
+      return await this.node.peerRouting.findPeer(peer);
+    } catch (err) {
+      return undefined;
+    }
+  }
   isPeerConnected(peerId: PeerId): boolean {
     const connections = this.node.getConnections();
     return connections.some((conn: Connection) =>
