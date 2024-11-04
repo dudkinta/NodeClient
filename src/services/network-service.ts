@@ -1,18 +1,18 @@
 import { EventEmitter } from "events";
-import { peerIdFromString } from "@libp2p/peer-id";
 import config from "./../config.json" assert { type: "json" };
 import { P2PClient, ConnectionOpenEvent } from "./../p2p-сlient.js";
-import type { Connection } from "@libp2p/interface";
 import { multiaddr } from "@multiformats/multiaddr";
+import { Connection } from "@libp2p/interface";
 import { Node } from "./../models/node.js";
-import { isLocal } from "../helpers/check-ip.js";
 import Queue from "queue";
+import { NodeStrategy } from "./node-strategy.js";
 
 export class NetworkService extends EventEmitter {
   private client: P2PClient;
   private nodes: Map<string, Node>;
   private localPeer: string | undefined;
   private taskQueue: Queue;
+  private nodeStrategy: NodeStrategy;
   constructor(p2pClient: P2PClient) {
     super();
     this.client = p2pClient;
@@ -20,6 +20,13 @@ export class NetworkService extends EventEmitter {
     this.taskQueue = new Queue();
     this.taskQueue.autostart = true;
     this.taskQueue.concurrency = 1;
+    this.nodeStrategy = new NodeStrategy(
+      this.client,
+      this.Connect,
+      this.RequestRoles,
+      this.RequestMultiaddrrs,
+      this.RequestConnectedPeers
+    );
   }
 
   async startAsync(): Promise<void> {
@@ -30,248 +37,144 @@ export class NetworkService extends EventEmitter {
       const { peerId, conn } = event;
       if (peerId.toString() === this.localPeer) return;
 
-      let node = this.nodes.get(peerId.toString());
-      if (!node) {
-        node = new Node(peerId, conn);
-      } else {
-        node.peerId = peerId;
-        node.connection = conn;
-      }
-
-      node.isConnect = true;
-      this.nodes.set(peerId.toString(), node);
-      console.log("New connection:", node);
+      const node = this.getNode(peerId.toString());
+      node.connection = conn;
+      node.peerId = peerId;
     });
     this.client.on("connection:close", (event) => {
       const { peerId } = event;
       if (peerId.toString() === this.localPeer) return;
 
-      const node = this.nodes.get(peerId.toString());
-      if (node) {
-        node.peerId = peerId;
-        node.connection = undefined;
-        node.isConnect = false;
-        node.peers.clear();
-      }
+      const node = this.getNode(peerId.toString());
+      node.isConnect = false;
+      node.connection = undefined;
+      node.peerId = undefined;
     });
-    this.client.on("protocolGrouper:add", (event) => {
-      const { protocol, peerId } = event;
+    this.client.on("updateProtocols", (event) => {
+      const { protocols, peerId } = event;
       if (peerId.toString() === this.localPeer) return;
 
-      const node = this.nodes.get(peerId.toString());
-      if (node) {
-        node.protocols.add(protocol);
-      } else {
-        const newNode = new Node(peerId);
-        newNode.protocols.add(protocol);
-        this.nodes.set(peerId.toString(), newNode);
+      let node = this.getNode(peerId.toString());
+      if (protocols) {
+        protocols.forEach((protocol: string) => {
+          if (node.protocols.has(protocol)) return;
+          node.protocols.add(protocol);
+        });
       }
     });
+
+    this.nodeStrategy.on("foundPeer", async (event) => {
+      const { peer, addrr } = event;
+      if (peer == this.localPeer) return;
+      const node = this.getNode(peer);
+      if (node.isConnect) return;
+
+      node.addresses.add(addrr);
+      console.log(`connect to address ${addrr}`);
+      const conn = await this.Connect(this.client, addrr);
+      if (conn) {
+        node.connection = conn;
+        node.peerId = conn.remotePeer;
+        node.isConnect = true;
+        this.nodeStrategy.execute(node);
+      }
+    });
+    this.nodeStrategy.on("removePeer", async (event) => {
+      const { peer } = event;
+      await this.client.disconnectFrom(peer);
+    });
+
     const relay = config.relay[0];
     const address = `/ip4/${relay.ADDRESS}/tcp/${relay.PORT}/ws/p2p/${relay.PEER}`;
-    console.log("Connect to relay", address);
-    const ma = multiaddr(address);
-    await this.client.connectTo(ma);
-    this.startAnalizers();
-  }
-
-  private startAnalizers(): void {
-    setInterval(() => {
-      this.addressedAndRolesAnalizer();
-    }, 10e3);
-    setInterval(async () => {
-      this.discoveryAnalizr();
-    }, 10e3);
-    setInterval(async () => {
-      this.connectingAnalizer();
-    }, 10e3);
-    setInterval(() => {
-      this.createEmptyPeers();
-    }, 10e3);
-  }
-
-  private createEmptyPeers(): void {
-    for (const nodePair of this.nodes) {
-      const node = nodePair[1];
-      if (node.peers.size == 0) continue;
-
-      for (const peerContact of node.peers) {
-        if (peerContact[0] === this.localPeer) continue;
-
-        if (!this.nodes.has(peerContact[0])) {
-          console.log("Create peer from nodePeers", peerContact[0]);
-          let peerId = peerIdFromString(peerContact[0]);
-          const node = new Node(peerId);
-          node.addresses = new Set();
-          node.addresses.add(peerContact[1]);
-          this.nodes.set(peerContact[0], node);
-          /*this.taskQueue.push(async () => {
-            console.log("Find empty peer", peerId);
-            const peerInfo = await this.client.findPeer(peerId);
-          });*/
-        }
-      }
+    const conn = await this.Connect(this.client, address);
+    if (conn) {
+      const node = this.getNode(conn.remotePeer.toString());
+      node.connection = conn;
+      node.peerId = conn.remotePeer;
+      node.isConnect = true;
+      this.nodeStrategy.execute(node);
     }
   }
 
-  private discoveryAnalizr(): void {
-    for (const nodePair of this.nodes) {
-      const node = nodePair[1];
-      if (!node.peerId || !node.connection) continue;
+  private getNode(peerId: string): Node {
+    let node = this.nodes.get(peerId);
+    if (!node) {
+      node = new Node(this.nodeStrategy, undefined, undefined);
+      this.nodes.set(peerId, node);
+    }
+    return node;
+  }
+  private async Connect(
+    client: P2PClient,
+    addrr: string
+  ): Promise<Connection | undefined> {
+    const ma = multiaddr(addrr);
+    const conn = await client.connectTo(ma);
+    if (conn) {
+      return conn;
+    }
+    return undefined;
+  }
 
-      this.taskQueue.push(async () => {
-        const peerList = await this.client.askToConnection(
-          node.connection!,
-          config.protocols.PEER_LIST
+  private async RequestRoles(
+    client: P2PClient,
+    node: Node
+  ): Promise<string[] | undefined> {
+    if (!node.connection) return undefined;
+    if (!node.isConnect) return undefined;
+    try {
+      if (node.protocols.has(config.protocols.ROLE)) {
+        const roleList = await client.askToConnection(
+          node.connection,
+          config.protocols.ROLE
         );
-        const peerInfoList: any[] = JSON.parse(peerList);
-        peerInfoList.forEach((peerInfo) => {
-          const { peerId, address } = peerInfo;
-          if (!node.peers.has(peerId)) {
-            if (node.protocols.has(config.protocols.CIRCUIT_HOP)) {
-              const relayAddress = node.connection!.remoteAddr.toString();
-              const fullAddress = `${relayAddress}/p2p-circuit/webrtc/p2p/${peerId}`;
-              node.peers.set(peerId, fullAddress);
-            }
-          }
-        });
-      });
-    }
-  }
-
-  private addressedAndRolesAnalizer(): void {
-    for (const nodePair of this.nodes) {
-      const node = nodePair[1];
-      if (!node.peerId) {
-        continue;
-      }
-
-      if (node.isConnect) {
-        if (node.roles.size === 0) {
-          this.taskQueue.push(async () => {
-            const roleList = await this.client.askToConnection(
-              node.connection!,
-              config.protocols.ROLE
-            );
-            const roles: string[] = JSON.parse(roleList);
-            roles.forEach((role) => {
-              if (!node.roles.has(role)) {
-                node.roles.add(role);
-              }
-            });
-          });
-        }
+        return JSON.parse(roleList);
       } else {
-        this.taskQueue.push(async () => {
-          if (node.addresses.size > 0) {
-            const ma = multiaddr(node.addresses.values().next().value);
-            /*console.log("Try connect to", ma.toString());
-            const connect = await this.client.connectTo(ma);
-            if (!connect) {
-              return;
-            }
-            console.log("Connecting return:", connect);*/
-            const roleList = await this.client.askToPeer(
-              ma,
-              config.protocols.ROLE
-            );
-            const roles: string[] = JSON.parse(roleList);
-            console.log("Roles:", roles);
-            roles.forEach((role) => {
-              if (!node.roles.has(role)) {
-                node.roles.add(role);
-              }
-            });
-
-            const multiAddrList = await this.client.askToPeer(
-              ma,
-              config.protocols.MULTIADDRES
-            );
-            const multiaddrrs: string[] = JSON.parse(multiAddrList);
-            console.log("Multiaddrs:", multiaddrrs);
-            multiaddrrs.forEach((ma) => {
-              if (!node.addresses.has(ma)) {
-                node.addresses.add(ma);
-              }
-            });
-          }
-        });
+        return undefined;
       }
-    }
-  }
-
-  private connectingAnalizer(): void {
-    const relayCount = Array.from(this.nodes.values()).filter(
-      (n) => n.roles.has(config.roles.RELAY) && n.isConnect
-    ).length;
-    const nodeCount = Array.from(this.nodes.values()).filter(
-      (n) => n.roles.has(config.roles.NODE) && n.isConnect
-    ).length;
-
-    for (const nodePair of this.nodes) {
-      const node = nodePair[1];
-      if (!node.peerId) continue;
-
-      if (!node.isConnect) {
-        this.taskQueue.push(async () => {
-          const conection = await this.tryConnectNode(node);
-          node.connection = conection;
-        });
-      }
-
-      if (node.isConnect && node.protocols.has(config.protocols.PING)) {
-        this.taskQueue.push(async () => {
-          await this.trySendPing(node);
-        });
-      }
-    }
-  }
-
-  private async tryConnectNode(node: Node): Promise<Connection | undefined> {
-    try {
-      if (node.addresses.size > 0) {
-        const multiaddrs = Array.from(node.addresses).map((a) => multiaddr(a));
-        const filteredAddrs = multiaddrs.filter((ma) => !isLocal(ma));
-        if (filteredAddrs.length > 0) {
-          console.log(
-            `Try connect to ${node.peerId?.toString()} with address ${filteredAddrs[0].toString()}`
-          );
-          const connect = await this.client.connectTo(filteredAddrs[0]);
-          if (connect) {
-            node.connection = connect;
-            node.isConnect = true;
-            console.log(`Connected success to ${node.peerId?.toString()}`);
-            return connect;
-          }
-        } else {
-          console.log(`All addresses are local for ${node.peerId?.toString()}`);
-        }
-      }
-      return undefined;
     } catch (error) {
-      console.error("Error in tryConnectNode", error);
+      console.error("Error in RequestRoles", error);
       return undefined;
     }
   }
 
-  private async trySendPing(node: Node): Promise<void> {
-    if (!node.connection) return;
-
+  private async RequestMultiaddrrs(
+    client: P2PClient,
+    node: Node
+  ): Promise<string[] | undefined> {
+    if (!node.connection) return undefined;
+    if (!node.isConnect) return undefined;
     try {
-      const startTime = Date.now();
-
-      const result = await this.client.askToConnection(
-        node.connection,
-        config.protocols.PING
-      );
-      const isPingSuccess = result === "PONG";
-      if (!isPingSuccess) {
-        console.log(
-          `Ping node ${node.peerId?.toString()} ${isPingSuccess ? "success" : "fail"} (${Date.now() - startTime} ms)`
+      if (node.protocols.has(config.protocols.MULTIADDRES)) {
+        const addrrList = await client.askToConnection(
+          node.connection,
+          config.protocols.MULTIADDRES
         );
+        return JSON.parse(addrrList);
+      } else {
+        return undefined;
       }
     } catch (error) {
-      console.error("Error in trySendPing", error);
+      console.error("Error in RequestMultiaddrrs", error);
+      return undefined;
+    }
+  }
+
+  private async RequestConnectedPeers(
+    client: P2PClient,
+    node: Node
+  ): Promise<any | undefined> {
+    if (!node.connection) return undefined;
+    if (!node.isConnect) return undefined;
+    try {
+      const peerList = await client.askToConnection(
+        node.connection,
+        config.protocols.PEER_LIST
+      );
+      return JSON.parse(peerList);
+    } catch (error) {
+      console.error("Error in RequestConnectedPeers", error);
+      return undefined;
     }
   }
 }

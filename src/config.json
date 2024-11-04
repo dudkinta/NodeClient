@@ -9,7 +9,7 @@
   },
   "roles": {
     "RELAY": "chainrelay",
-    "NODE": "node"
+    "NODE": "chainnode"
   },
   "relay": [
     {

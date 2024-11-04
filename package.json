@@ -33,7 +33,6 @@
     "@libp2p/webrtc": "^5.0.16",
     "@libp2p/websockets": "^9.0.11",
     "@multiformats/multiaddr": "^12.3.1",
-    "@tgbc/protocol-grouper": "^1.0.4",
     "it-byte-stream": "^1.1.0",
     "libp2p": "^2.2.1",
     "queue": "^7.0.0",
