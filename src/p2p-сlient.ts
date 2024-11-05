@@ -332,9 +332,6 @@ export class P2PClient extends EventEmitter {
       const ROLES = [config.roles.NODE];
       await pipe([fromString(JSON.stringify(ROLES))], stream);
     });
-    this.node.handle(config.protocols.PING, async ({ stream }: any) => {
-      await pipe([fromString("PONG")], stream);
-    });
     this.node.handle(config.protocols.MULTIADDRES, async ({ stream }: any) => {
       if (!this.node) {
         return;
@@ -349,11 +346,13 @@ export class P2PClient extends EventEmitter {
         return;
       }
       const connections = this.node.getConnections();
-      const peerIds = connections.map((conn: any) =>
-        conn.remotePeer.toString()
-      );
 
-      await pipe([fromString(JSON.stringify(peerIds))], stream);
+      const peerData = connections.map((conn) => ({
+        peerId: conn.remotePeer.toString(),
+        address: conn.remoteAddr.toString(),
+      }));
+
+      await pipe([fromString(JSON.stringify(peerData))], stream);
     });
     try {
       await this.node.start();

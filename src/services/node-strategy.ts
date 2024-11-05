@@ -61,9 +61,6 @@ export class NodeStrategy extends EventEmitter {
       if (roles != undefined) {
         roles.forEach((role) => {
           node.roles.add(role);
-          console.log(
-            `Strategy->Role ${role} added to node ${node.peerId?.toString()}`
-          );
         });
       } else {
         console.log("Strategy->Waiting for roles");
@@ -78,9 +75,6 @@ export class NodeStrategy extends EventEmitter {
           multiaddrs.forEach((multiaddr) => {
             if (multiaddr && !node.addresses.has(multiaddr)) {
               node.addresses.add(multiaddr);
-              console.log(
-                `Strategy->Multiaddr ${multiaddr} added to node ${node.peerId?.toString()}`
-              );
             }
           });
         } else {
@@ -97,18 +91,20 @@ export class NodeStrategy extends EventEmitter {
       );
       if (connectedPeers) {
         connectedPeers.forEach((peerInfo: any) => {
-          const peer: string = peerInfo.peerId;
-          let addrr: string = peerInfo.address;
           if (node.roles.has(config.roles.RELAY)) {
             const relayAddress = node.connection!.remoteAddr.toString();
-            const fullAddress = `${relayAddress}/p2p-circuit/webrtc/p2p/${peer}`;
-            addrr = fullAddress;
-          } else {
-            addrr = addrr;
-          }
-          if (!node.candidates.has(peer)) {
-            node.candidates.set(peer, addrr);
-            this.emit("foundPeer", { peer, addrr });
+            const fullAddress = `${relayAddress}/p2p-circuit/webrtc/p2p/${peerInfo.peerId}`;
+            //const fullAddress = `${relayAddress}/p2p-circuit/p2p/${peerInfo.peerId}`;
+            if (!node.candidates.has(peerInfo.peerId)) {
+              node.candidates.set(peerInfo.peerId, fullAddress);
+              console.log(
+                `Strategy->Found peer ${peerInfo.peerId} with address ${fullAddress}`
+              );
+              this.emit("foundPeer", {
+                peer: peerInfo.peerId,
+                addrr: fullAddress,
+              });
+            }
           }
         });
       }

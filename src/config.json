@@ -3,7 +3,6 @@
     "ROLE": "/chain/roles/1.0.0",
     "PEER_LIST": "/chain/peers/1.0.0",
     "CHAT": "/chain/chat/1.0.0",
-    "PING": "/chain/ping/1.0.0",
     "MULTIADDRES": "/chain/multiadres/1.0.0",
     "CIRCUIT_HOP": "/libp2p/circuit/relay/0.2.0/hop"
   },

@@ -70,9 +70,10 @@ export class NetworkService extends EventEmitter {
       if (node.isConnect) return;
 
       node.addresses.add(addrr);
-      console.log(`connect to address ${addrr}`);
+      console.log(`foundPeer->connect to address ${addrr}`);
       const conn = await this.Connect(this.client, addrr);
       if (conn) {
+        console.log(`foundPeer->connected to ${conn.remotePeer.toString()}`);
         node.connection = conn;
         node.peerId = conn.remotePeer;
         node.isConnect = true;
@@ -81,6 +82,7 @@ export class NetworkService extends EventEmitter {
     });
     this.nodeStrategy.on("removePeer", async (event) => {
       const { peer } = event;
+      console.log(`removePeer->disconnect from ${peer.toString()}`);
       await this.client.disconnectFrom(peer);
     });
 
