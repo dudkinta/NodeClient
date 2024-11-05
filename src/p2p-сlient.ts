@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
 import { createLibp2p, Libp2p } from "libp2p";
-import type { Connection, PeerId, PeerInfo } from "@libp2p/interface";
+import type { Connection, PeerId } from "@libp2p/interface";
 import { ping, PingService } from "@libp2p/ping";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
@@ -70,7 +70,7 @@ export class P2PClient extends EventEmitter {
     return node;
   }
 
-  async pingCandidate(peerAddress: string): Promise<number | undefined> {
+  async pingByAddress(peerAddress: string): Promise<number | undefined> {
     if (!this.node) {
       return undefined;
     }
@@ -78,9 +78,8 @@ export class P2PClient extends EventEmitter {
       const addr = multiaddr(peerAddress);
       const ping = this.node.services.ping as PingService;
       return await ping.ping(addr);
-      //return undefined;
     } catch (error) {
-      console.error(`Ошибка при пинге ${peerAddress}:`, error);
+      //console.error(`Ошибка при пинге ${peerAddress}:`, error);
       return undefined;
     }
   }
@@ -89,6 +88,7 @@ export class P2PClient extends EventEmitter {
     const signal = AbortSignal.timeout(5000);
     try {
       if (!this.node) {
+        console.error("Error on connectTo. Node is not initialized");
         return undefined;
       }
       return await this.node.dial(ma, { signal });
@@ -231,6 +231,12 @@ export class P2PClient extends EventEmitter {
   async askToConnection(conn: Connection, protocol: string): Promise<string> {
     let stream: any;
     try {
+      if (!this.node) {
+        return "";
+      }
+      if (conn && conn.status !== "open") {
+        return "";
+      }
       // Создание нового потока
       stream = await conn.newStream(protocol);
 
@@ -279,13 +285,9 @@ export class P2PClient extends EventEmitter {
       notifyOnLimitedConnection: false,
     });
     await this.node.start();
-    const localPeer = this.node.peerId;
-    console.log("Local peer ID:", localPeer.toString());
-    this.localPeer = localPeer.toString();
+    this.localPeer = this.node.peerId.toString();
     this.node.addEventListener("connection:open", (event: any) => {
-      const conn: Connection = event.detail;
-      const peerId: PeerId = conn.remotePeer;
-      this.emit("connection:open", { peerId, conn });
+      this.emit("connection:open", event.detail);
     });
     this.node.addEventListener("connection:close", (event: any) => {
       const conn: Connection = event.detail;

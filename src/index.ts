@@ -1,5 +1,5 @@
 import { P2PClient } from "./p2p-сlient.js";
-import { NetworkService } from "./services/network-service.js";
+import { NetworkService } from "./services/nerwork-service.js";
 
 async function main(): Promise<void> {
   const networkService = new NetworkService(new P2PClient());
