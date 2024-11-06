@@ -1,8 +1,10 @@
 import { Node } from "../models/node.js";
 import config from "../config.json" assert { type: "json" };
 import { Connection } from "@libp2p/interface";
+import { isLocalAddress, isDirect } from "../helpers/check-ip.js";
 
 type RequestConnect = (addrr: string) => Promise<Connection | undefined>;
+type RequestDisconnect = (addrr: string) => Promise<void>;
 type RequestRoles = (node: Node) => Promise<string[] | undefined>;
 
 type RequestMultiaddrs = (node: Node) => Promise<string[] | undefined>;
@@ -21,6 +23,7 @@ export class NodeStorage extends Map<string, Node> {
   maxNodeCount: number = 20;
 
   private requestConnect: RequestConnect;
+  private requestDisconnect: RequestDisconnect;
   private requestRoles: RequestRoles;
   private requestMultiaddrs: RequestMultiaddrs;
   private requestConnectedPeers: RequestConnectedPeers;
@@ -29,6 +32,7 @@ export class NodeStorage extends Map<string, Node> {
   private localPeer: string | undefined;
   constructor(
     requestConnect: RequestConnect,
+    requestDisconnect: RequestDisconnect,
     requestRoles: RequestRoles,
     requestMultiaddrs: RequestMultiaddrs,
     requestConnectedPeers: RequestConnectedPeers,
@@ -36,6 +40,7 @@ export class NodeStorage extends Map<string, Node> {
   ) {
     super();
     this.requestConnect = requestConnect;
+    this.requestDisconnect = requestDisconnect;
     this.requestRoles = requestRoles;
     this.requestMultiaddrs = requestMultiaddrs;
     this.requestConnectedPeers = requestConnectedPeers;
@@ -46,7 +51,7 @@ export class NodeStorage extends Map<string, Node> {
     super.set(key, value);
     setTimeout(async () => {
       await this.waitConnect(value);
-      if (value.connection && value.connection.status == "open") {
+      if (value.isConnect()) {
         await this.getRoles(value);
         if (value.roles.size > 0) {
           await this.getMultiaddrs(value);
@@ -72,6 +77,12 @@ export class NodeStorage extends Map<string, Node> {
   }
 
   private async counter() {
+    await this.counterByRoles();
+    //this.optimizeConnection();
+    this.counterByConnections();
+  }
+
+  private async counterByRoles() {
     let rCount = 0;
     let nCount = 0;
     let uCount = 0;
@@ -81,13 +92,9 @@ export class NodeStorage extends Map<string, Node> {
         this.printUnknownNode(key, "node is undefined");
         continue;
       }
-      if (!node.connection) {
+      if (!node.isConnect()) {
         uCount++;
-        this.printUnknownNode(key, "connection is undefined");
-        continue;
-      }
-      if (node.connection.status != "open") {
-        uCount++;
+        console.log(node.connections);
         this.printUnknownNode(key, "connection status is not open");
         continue;
       }
@@ -115,6 +122,53 @@ export class NodeStorage extends Map<string, Node> {
     );
   }
 
+  private counterByConnections() {
+    let relayConnections = 0;
+    let directConnections = 0;
+    for (const [key, node] of this) {
+      if (!node) {
+        continue;
+      }
+      if (!node.isConnect()) {
+        continue;
+      }
+      node.connections.forEach((conn) => {
+        if (isDirect(conn.remoteAddr.toString())) {
+          /*console.log(
+            `NetworkStrategy-> Direct connection: ${conn.remoteAddr.toString()}`
+          );*/
+          directConnections++;
+        } else {
+          //console.log(conn);
+          relayConnections++;
+        }
+      });
+    }
+    console.log(
+      `NetworkStrategy-> Relay connections: ${relayConnections}, Direct connections: ${directConnections}`
+    );
+  }
+
+  private optimizeConnection() {
+    for (const [key, node] of this) {
+      if (!node) {
+        continue;
+      }
+      if (!node.isConnect()) {
+        continue;
+      }
+
+      if (node.connections.size > 1) {
+        node.connections.forEach(async (conn) => {
+          if (conn.limits != undefined) {
+            console.log(`Request disconnect: ${conn.remoteAddr.toString()}`);
+            this.requestDisconnect(conn.remoteAddr.toString());
+          }
+        });
+      }
+    }
+  }
+
   private async checkStatus() {
     this.removeDeadNodes();
 
@@ -122,10 +176,7 @@ export class NodeStorage extends Map<string, Node> {
       if (!node) {
         continue;
       }
-      if (!node.connection) {
-        continue;
-      }
-      if (node.connection.status != "open") {
+      if (!node.isConnect()) {
         continue;
       }
       if (node.roles.size == 0 && node.protocols.has(config.protocols.ROLE)) {
@@ -138,6 +189,7 @@ export class NodeStorage extends Map<string, Node> {
         await this.getMultiaddrs(node);
       }
       await this.findPeer(node);
+      await this.checkDirectAddress(node);
     }
   }
 
@@ -147,11 +199,7 @@ export class NodeStorage extends Map<string, Node> {
         this.penaltyNodes.push(key);
         continue;
       }
-      if (!node.connection) {
-        this.penaltyNodes.push(key);
-        continue;
-      }
-      if (node.connection.status != "open") {
+      if (!node.isConnect()) {
         this.penaltyNodes.push(key);
         continue;
       }
@@ -176,10 +224,7 @@ export class NodeStorage extends Map<string, Node> {
 
   private async waitConnect(node: Node) {
     let countDelay = 0;
-    while (
-      !(node.connection && node.connection.status == "open") ||
-      countDelay < 20
-    ) {
+    while (!node.isConnect() && countDelay < 20) {
       await this.delay(500);
       countDelay++;
     }
@@ -208,18 +253,22 @@ export class NodeStorage extends Map<string, Node> {
             return;
           }
           if (node.roles.has(config.roles.RELAY)) {
-            const relayAddress = node.connection!.remoteAddr.toString();
+            const connecton = node.getOpenedConnection();
+            if (!connecton) return undefined;
+
+            const relayAddress = node
+              .getOpenedConnection()!
+              .remoteAddr.toString();
             const fullAddress = `${relayAddress}/p2p-circuit/webrtc/p2p/${peerInfo.peerId}`;
             const lat = await this.requestPing(fullAddress);
-            console.log(`Strategy-> Relay ping to ${fullAddress}: ${lat}`);
-            if (lat && lat < 10000) {
+            if (lat && lat < 10000 && this.nodeCount < this.maxNodeCount) {
               await this.requestConnect(fullAddress);
             }
           }
           if (node.roles.has(config.roles.NODE)) {
             const lat = await this.requestPing(peerInfo.address);
             console.log(`Strategy-> Node ping to ${peerInfo.address}: ${lat}`);
-            if (lat && lat < 10000) {
+            if (lat && lat < 10000 && this.nodeCount < this.maxNodeCount) {
               await this.requestConnect(peerInfo.address);
             }
           }
@@ -248,6 +297,26 @@ export class NodeStorage extends Map<string, Node> {
             `Strategy(${node.peerId?.toString()})-Waiting for multiaddrs. Node adresses count: ${node.addresses.size}`
           );
           await this.delay(1000);
+        }
+      }
+    }
+  }
+
+  private async checkDirectAddress(node: Node): Promise<void> {
+    if (node.roles.has(config.roles.NODE)) {
+      for (const [address, isAvailable] of node.addresses) {
+        if (isAvailable) {
+          continue;
+        }
+        if (isLocalAddress(address) || address.includes("p2p-circuit")) {
+          continue;
+        }
+        const lat = await this.requestPing(address);
+        console.log(
+          `Strategy-> Node directPing (${node.peerId?.toString()}) to ${address}: ${lat}`
+        );
+        if (lat && lat < 10000) {
+          node.addresses.set(address, true);
         }
       }
     }

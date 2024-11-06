@@ -99,16 +99,16 @@ export class P2PClient extends EventEmitter {
       return undefined;
     }
   }
-  async disconnectFrom(peer: PeerId): Promise<void> {
+  async disconnectFromMA(ma: Multiaddr): Promise<void> {
     if (!this.node) {
       return;
     }
     const signal = AbortSignal.timeout(5000);
     try {
-      return await this.node.hangUp(peer, { signal });
+      return await this.node.hangUp(ma, { signal });
     } catch (err) {
       console.error(
-        `Error on disconnectFrom. PeerId: ${peer.toString()}. Error: ${err}`
+        `Error on disconnectFrom. PeerId: ${ma.toString()}. Error: ${err}`
       );
       return undefined;
     }

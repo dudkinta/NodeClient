@@ -1,10 +1,9 @@
 import { EventEmitter } from "events";
 import config from "../config.json" assert { type: "json" };
-import { P2PClient, ConnectionOpenEvent } from "../p2p-сlient.js";
+import { P2PClient } from "../p2p-сlient.js";
 import { multiaddr } from "@multiformats/multiaddr";
 import { Connection, PeerId } from "@libp2p/interface";
 import { Node } from "../models/node.js";
-import Queue from "queue";
 import { Lock } from "../helpers/lock.js";
 import { NodeStorage } from "./node-storage.js";
 
@@ -18,6 +17,7 @@ export class NetworkService extends EventEmitter {
     this.client = p2pClient;
     this.nodeStorage = new NodeStorage(
       this.RequestConnect.bind(this),
+      this.RequestDisconnect.bind(this),
       this.RequestRoles.bind(this),
       this.RequestMultiaddrrs.bind(this),
       this.RequestConnectedPeers.bind(this),
@@ -40,7 +40,6 @@ export class NetworkService extends EventEmitter {
       if (conn.status != "open") return;
       if (!peerId) return;
 
-      console.log(`New Connection: (${peerId}) ${conn.remoteAddr.toString()}`);
       this.getNode(peerId.toString(), peerId, conn);
     });
 
@@ -73,9 +72,8 @@ export class NetworkService extends EventEmitter {
       if (peerId) {
         node.peerId = peerId;
       }
-
-      if (connection && connection.status == "open") {
-        node.connection = connection;
+      if (connection) {
+        node.connections.add(connection);
       }
     }
     return node;
@@ -86,13 +84,19 @@ export class NetworkService extends EventEmitter {
     return await this.client.connectTo(ma);
   }
 
+  private async RequestDisconnect(addrr: string): Promise<void> {
+    const ma = multiaddr(addrr);
+    this.client.disconnectFromMA(ma);
+  }
   private async RequestRoles(node: Node): Promise<string[] | undefined> {
-    if (!node.connection) return undefined;
-    if (node.connection.status != "open") return undefined;
+    if (!node.isConnect()) return undefined;
     try {
       if (node.protocols.has(config.protocols.ROLE)) {
+        const connecton = node.getOpenedConnection();
+        if (!connecton) return undefined;
+
         const roleList = await this.client.askToConnection(
-          node.connection,
+          connecton,
           config.protocols.ROLE
         );
         if (!roleList || roleList.length === 0) return undefined;
@@ -107,12 +111,14 @@ export class NetworkService extends EventEmitter {
   }
 
   private async RequestMultiaddrrs(node: Node): Promise<string[] | undefined> {
-    if (!node.connection) return undefined;
-    if (node.connection.status != "open") return undefined;
+    if (!node.isConnect()) return undefined;
     try {
       if (node.protocols.has(config.protocols.MULTIADDRES)) {
+        const connecton = node.getOpenedConnection();
+        if (!connecton) return undefined;
+
         const addrrList = await this.client.askToConnection(
-          node.connection,
+          connecton,
           config.protocols.MULTIADDRES
         );
         if (!addrrList || addrrList.length === 0) return undefined;
@@ -127,11 +133,13 @@ export class NetworkService extends EventEmitter {
   }
 
   private async RequestConnectedPeers(node: Node): Promise<any | undefined> {
-    if (!node.connection) return undefined;
-    if (node.connection.status != "open") return undefined;
+    if (!node.isConnect()) return undefined;
     try {
+      const connecton = node.getOpenedConnection();
+      if (!connecton) return undefined;
+
       const peerList = await this.client.askToConnection(
-        node.connection,
+        connecton,
         config.protocols.PEER_LIST
       );
       if (!peerList || peerList.length === 0 || peerList == `''`)
