@@ -1,5 +1,5 @@
 import { EventEmitter } from "events";
-import config from "../config.json" assert { type: "json" };
+import ConfigLoader from "../helpers/config-loader.js";
 import { P2PClient } from "../p2p-сlient.js";
 import { multiaddr } from "@multiformats/multiaddr";
 import { Connection, PeerId } from "@libp2p/interface";
@@ -12,6 +12,7 @@ export class NetworkService extends EventEmitter {
   private nodeStorage: NodeStorage;
   private localPeer: string | undefined;
   private lockerPing: Lock;
+  private config = ConfigLoader.getInstance().getConfig();
   constructor(p2pClient: P2PClient) {
     super();
     this.client = p2pClient;
@@ -91,13 +92,13 @@ export class NetworkService extends EventEmitter {
   private async RequestRoles(node: Node): Promise<string[] | undefined> {
     if (!node.isConnect()) return undefined;
     try {
-      if (node.protocols.has(config.protocols.ROLE)) {
+      if (node.protocols.has(this.config.protocols.ROLE)) {
         const connecton = node.getOpenedConnection();
         if (!connecton) return undefined;
 
         const roleList = await this.client.askToConnection(
           connecton,
-          config.protocols.ROLE
+          this.config.protocols.ROLE
         );
         if (!roleList || roleList.length === 0) return undefined;
         return JSON.parse(roleList);
@@ -113,13 +114,13 @@ export class NetworkService extends EventEmitter {
   private async RequestMultiaddrrs(node: Node): Promise<string[] | undefined> {
     if (!node.isConnect()) return undefined;
     try {
-      if (node.protocols.has(config.protocols.MULTIADDRES)) {
+      if (node.protocols.has(this.config.protocols.MULTIADDRES)) {
         const connecton = node.getOpenedConnection();
         if (!connecton) return undefined;
 
         const addrrList = await this.client.askToConnection(
           connecton,
-          config.protocols.MULTIADDRES
+          this.config.protocols.MULTIADDRES
         );
         if (!addrrList || addrrList.length === 0) return undefined;
         return JSON.parse(addrrList);
@@ -140,7 +141,7 @@ export class NetworkService extends EventEmitter {
 
       const peerList = await this.client.askToConnection(
         connecton,
-        config.protocols.PEER_LIST
+        this.config.protocols.PEER_LIST
       );
       if (!peerList || peerList.length === 0 || peerList == `''`)
         return undefined;

@@ -14,7 +14,7 @@ import { Multiaddr, multiaddr } from "@multiformats/multiaddr";
 import { byteStream } from "it-byte-stream";
 import { toString, fromString } from "uint8arrays";
 import { pipe } from "it-pipe";
-import config from "./config.json" assert { type: "json" };
+import ConfigLoader from "./helpers/config-loader.js";
 
 export interface ConnectionOpenEvent {
   peerId: PeerId;
@@ -23,9 +23,11 @@ export interface ConnectionOpenEvent {
 
 export class P2PClient extends EventEmitter {
   private node: Libp2p | undefined;
+  private config: any;
   localPeer: string | undefined;
   constructor() {
     super();
+    this.config = ConfigLoader.getInstance().getConfig();
   }
 
   private async createNode(): Promise<Libp2p> {
@@ -272,16 +274,16 @@ export class P2PClient extends EventEmitter {
 
   async startNode(): Promise<void> {
     this.node = await this.createNode();
-    await this.node.register(config.protocols.ROLE, {
+    await this.node.register(this.config.protocols.ROLE, {
       notifyOnLimitedConnection: false,
     });
-    await this.node.register(config.protocols.PEER_LIST, {
+    await this.node.register(this.config.protocols.PEER_LIST, {
       notifyOnLimitedConnection: false,
     });
-    await this.node.register(config.protocols.MULTIADDRES, {
+    await this.node.register(this.config.protocols.MULTIADDRES, {
       notifyOnLimitedConnection: false,
     });
-    await this.node.register(config.protocols.CHAT, {
+    await this.node.register(this.config.protocols.CHAT, {
       notifyOnLimitedConnection: false,
     });
     await this.node.start();
@@ -318,7 +320,7 @@ export class P2PClient extends EventEmitter {
     });
 
     this.node.handle(
-      config.protocols.CHAT,
+      this.config.protocols.CHAT,
       async ({ stream, connection }: any) => {
         const peerId = connection.remotePeer;
         console.log(`Received message from peer: ${peerId.toString()}`);
@@ -330,32 +332,38 @@ export class P2PClient extends EventEmitter {
         }
       }
     );
-    this.node.handle(config.protocols.ROLE, async ({ stream }: any) => {
-      const ROLES = [config.roles.NODE];
+    this.node.handle(this.config.protocols.ROLE, async ({ stream }: any) => {
+      const ROLES = [this.config.roles.NODE];
       await pipe([fromString(JSON.stringify(ROLES))], stream);
     });
-    this.node.handle(config.protocols.MULTIADDRES, async ({ stream }: any) => {
-      if (!this.node) {
-        return;
+    this.node.handle(
+      this.config.protocols.MULTIADDRES,
+      async ({ stream }: any) => {
+        if (!this.node) {
+          return;
+        }
+        const multiaddrs = this.node
+          .getMultiaddrs()
+          .map((ma: Multiaddr) => ma.toString());
+        await pipe([fromString(JSON.stringify(multiaddrs))], stream);
       }
-      const multiaddrs = this.node
-        .getMultiaddrs()
-        .map((ma: Multiaddr) => ma.toString());
-      await pipe([fromString(JSON.stringify(multiaddrs))], stream);
-    });
-    this.node.handle(config.protocols.PEER_LIST, async ({ stream }: any) => {
-      if (!this.node) {
-        return;
+    );
+    this.node.handle(
+      this.config.protocols.PEER_LIST,
+      async ({ stream }: any) => {
+        if (!this.node) {
+          return;
+        }
+        const connections = this.node.getConnections();
+
+        const peerData = connections.map((conn) => ({
+          peerId: conn.remotePeer.toString(),
+          address: conn.remoteAddr.toString(),
+        }));
+
+        await pipe([fromString(JSON.stringify(peerData))], stream);
       }
-      const connections = this.node.getConnections();
-
-      const peerData = connections.map((conn) => ({
-        peerId: conn.remotePeer.toString(),
-        address: conn.remoteAddr.toString(),
-      }));
-
-      await pipe([fromString(JSON.stringify(peerData))], stream);
-    });
+    );
     try {
       await this.node.start();
     } catch (err: any) {

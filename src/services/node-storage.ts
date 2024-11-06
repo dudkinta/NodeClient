@@ -1,5 +1,5 @@
 import { Node } from "../models/node.js";
-import config from "../config.json" assert { type: "json" };
+import ConfigLoader from "../helpers/config-loader.js";
 import { Connection } from "@libp2p/interface";
 import { isLocalAddress, isDirect } from "../helpers/check-ip.js";
 
@@ -16,12 +16,12 @@ type RequestConnectedPeers = (
 type RequestPing = (addrr: string) => Promise<number | undefined>;
 
 export class NodeStorage extends Map<string, Node> {
-  relayCount: number = 0;
-  nodeCount: number = 0;
-  unknownCount: number = 0;
-  maxRelayCount: number = 2;
-  maxNodeCount: number = 20;
-
+  private relayCount: number = 0;
+  private nodeCount: number = 0;
+  private unknownCount: number = 0;
+  private maxRelayCount: number = 2;
+  private maxNodeCount: number = 20;
+  private config = ConfigLoader.getInstance().getConfig();
   private requestConnect: RequestConnect;
   private requestDisconnect: RequestDisconnect;
   private requestRoles: RequestRoles;
@@ -94,13 +94,12 @@ export class NodeStorage extends Map<string, Node> {
       }
       if (!node.isConnect()) {
         uCount++;
-        console.log(node.connections);
         this.printUnknownNode(key, "connection status is not open");
         continue;
       }
-      if (node.roles.has(config.roles.RELAY)) {
+      if (node.roles.has(this.config.roles.RELAY)) {
         rCount++;
-      } else if (node.roles.has(config.roles.NODE)) {
+      } else if (node.roles.has(this.config.roles.NODE)) {
         nCount++;
       } else {
         this.printUnknownNode(key, "node role is undefined");
@@ -111,7 +110,7 @@ export class NodeStorage extends Map<string, Node> {
     this.nodeCount = nCount;
     this.unknownCount = uCount;
     if (rCount == 0) {
-      const relay = config.relay[0];
+      const relay = this.config.relay[0];
       if (!this.has(relay.PEER)) {
         const address = `/ip4/${relay.ADDRESS}/tcp/${relay.PORT}/ws/p2p/${relay.PEER}`;
         await this.requestConnect(address);
@@ -179,12 +178,15 @@ export class NodeStorage extends Map<string, Node> {
       if (!node.isConnect()) {
         continue;
       }
-      if (node.roles.size == 0 && node.protocols.has(config.protocols.ROLE)) {
+      if (
+        node.roles.size == 0 &&
+        node.protocols.has(this.config.protocols.ROLE)
+      ) {
         await this.getRoles(node);
       }
       if (
         node.addresses.size == 0 &&
-        node.protocols.has(config.protocols.MULTIADDRES)
+        node.protocols.has(this.config.protocols.MULTIADDRES)
       ) {
         await this.getMultiaddrs(node);
       }
@@ -241,7 +243,7 @@ export class NodeStorage extends Map<string, Node> {
   }
 
   private async findPeer(node: Node): Promise<void> {
-    if (node.protocols.has(config.protocols.PEER_LIST)) {
+    if (node.protocols.has(this.config.protocols.PEER_LIST)) {
       const connectedPeers = await this.requestConnectedPeers(node);
       if (connectedPeers) {
         connectedPeers.forEach(async (peerInfo: any) => {
@@ -252,7 +254,7 @@ export class NodeStorage extends Map<string, Node> {
           ) {
             return;
           }
-          if (node.roles.has(config.roles.RELAY)) {
+          if (node.roles.has(this.config.roles.RELAY)) {
             const connecton = node.getOpenedConnection();
             if (!connecton) return undefined;
 
@@ -265,7 +267,7 @@ export class NodeStorage extends Map<string, Node> {
               await this.requestConnect(fullAddress);
             }
           }
-          if (node.roles.has(config.roles.NODE)) {
+          if (node.roles.has(this.config.roles.NODE)) {
             const lat = await this.requestPing(peerInfo.address);
             console.log(`Strategy-> Node ping to ${peerInfo.address}: ${lat}`);
             if (lat && lat < 10000 && this.nodeCount < this.maxNodeCount) {
@@ -280,8 +282,8 @@ export class NodeStorage extends Map<string, Node> {
   private async getMultiaddrs(node: Node): Promise<void> {
     console.log(`Strategy(${node.peerId?.toString()})-Getting multiaddrs`);
     if (
-      node.protocols.has(config.protocols.MULTIADDRES) &&
-      node.roles.has(config.roles.NODE)
+      node.protocols.has(this.config.protocols.MULTIADDRES) &&
+      node.roles.has(this.config.roles.NODE)
     ) {
       let multiaddrs: string[] | undefined;
       while (multiaddrs == undefined) {
@@ -303,7 +305,7 @@ export class NodeStorage extends Map<string, Node> {
   }
 
   private async checkDirectAddress(node: Node): Promise<void> {
-    if (node.roles.has(config.roles.NODE)) {
+    if (node.roles.has(this.config.roles.NODE)) {
       for (const [address, isAvailable] of node.addresses) {
         if (isAvailable) {
           continue;

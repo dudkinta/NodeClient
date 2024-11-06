@@ -1,7 +1,9 @@
 import { P2PClient } from "./p2p-сlient.js";
 import { NetworkService } from "./services/nerwork-service.js";
+import ConfigLoader from "./helpers/config-loader.js";
 
 async function main(): Promise<void> {
+  await ConfigLoader.initialize();
   const networkService = new NetworkService(new P2PClient());
   await networkService.startAsync();
 }

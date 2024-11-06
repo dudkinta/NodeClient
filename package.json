@@ -2,11 +2,12 @@
   "name": "node",
   "version": "1.0.0",
   "main": "index.js",
+  "bin": "dist/index.js",
   "type": "module",
   "scripts": {
-    "start": "npm run build && node --loader ts-node/esm ./src/index.ts",
+    "start": "node --loader ts-node/esm ./src/index.ts",
     "build": "npx tsc",
-    "serve": "node dist/index.js"
+    "serve": "npx tsc && node dist/index.js"
   },
   "keywords": [],
   "author": "",
