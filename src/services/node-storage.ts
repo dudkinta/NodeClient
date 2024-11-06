@@ -110,10 +110,8 @@ export class NodeStorage extends Map<string, Node> {
     this.unknownCount = uCount;
     if (rCount == 0) {
       const relay = this.config.relay[0];
-      if (!this.has(relay.PEER)) {
-        const address = `/ip4/${relay.ADDRESS}/tcp/${relay.PORT}/ws/p2p/${relay.PEER}`;
-        await this.requestConnect(address);
-      }
+      const address = `/ip4/${relay.ADDRESS}/tcp/${relay.PORT}/ws/p2p/${relay.PEER}`;
+      await this.requestConnect(address);
     }
     console.log(
       `NetworkStrategy-> Relay count: ${this.relayCount}, Node count: ${this.nodeCount}, Unknown count: ${this.unknownCount}`
@@ -201,6 +199,10 @@ export class NodeStorage extends Map<string, Node> {
         continue;
       }
       if (!node.isConnect()) {
+        this.penaltyNodes.push(key);
+        continue;
+      }
+      if (node.roles.size == 0) {
         this.penaltyNodes.push(key);
         continue;
       }

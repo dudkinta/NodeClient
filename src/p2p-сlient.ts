@@ -199,7 +199,9 @@ export class P2PClient extends EventEmitter {
         console.error("Error on connectTo. Node is not initialized");
         return;
       }
-      await this.node.dial(ma, { signal });
+      await this.node.dial(ma, { signal }).catch((error) => {
+        console.error(`Error during dial: ${error}`);
+      });
     } catch (error: unknown) {
       if (error instanceof DialError) {
         console.error(`Connection Error: ${error.message}`);
@@ -217,7 +219,9 @@ export class P2PClient extends EventEmitter {
     }
     const signal = AbortSignal.timeout(5000);
     try {
-      return await this.node.hangUp(ma, { signal });
+      return await this.node.hangUp(ma, { signal }).catch((error) => {
+        console.error(`Error during disconnectFromMA: ${error}`);
+      });
     } catch (err) {
       console.error(
         `Error on disconnectFrom. PeerId: ${ma.toString()}. Error: ${err}`
@@ -228,15 +232,18 @@ export class P2PClient extends EventEmitter {
 
   async askToConnection(conn: Connection, protocol: string): Promise<string> {
     let stream: any;
+    let askResult = "[]";
     try {
       if (!this.node) {
-        return "";
+        return askResult;
       }
       if (conn && conn.status !== "open") {
-        return "";
+        return askResult;
       }
       // Создание нового потока
-      stream = await conn.newStream(protocol);
+      stream = await conn.newStream(protocol).catch((error) => {
+        throw new Error(`Error during newStream: ${error}`);
+      });
 
       // Работа с потоком через pipe
       const result = await pipe(stream, async (source) => {
@@ -244,27 +251,32 @@ export class P2PClient extends EventEmitter {
         for await (const buf of source) {
           output += toString(buf.subarray());
         }
-        return output;
+        askResult = output;
+      }).catch((error) => {
+        throw new Error(`Error during pipe: ${error}`);
       });
 
-      return result;
+      return askResult;
     } catch (err) {
       // Логирование ошибки
       console.error(
         `Error on askToConnection. PeerId: ${conn.remotePeer.toString()}. Protocol: ${protocol}. Error: ${err}`
       );
-      return "";
     } finally {
       // Гарантированное закрытие потока
       if (stream && stream.close) {
         try {
-          await stream.close(); // Закрытие потока
+          await stream.close().catch((err: any) => {
+            throw new Error(`Error during close stream: ${err}`);
+          });
         } catch (closeErr) {
           console.error(
             `Error closing stream. PeerId: ${conn.remotePeer.toString()}. Error: ${closeErr}`
           );
+          return askResult;
         }
       }
+      return askResult;
     }
   }
 
