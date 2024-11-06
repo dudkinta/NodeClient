@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { createLibp2p, Libp2p } from "libp2p";
 import type { Connection, PeerId } from "@libp2p/interface";
+import { DialError } from "@libp2p/interface";
 import { ping, PingService } from "@libp2p/ping";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
@@ -191,19 +192,22 @@ export class P2PClient extends EventEmitter {
     }
   }
 
-  async connectTo(ma: Multiaddr): Promise<Connection | undefined> {
+  async connectTo(ma: Multiaddr): Promise<void> {
     const signal = AbortSignal.timeout(5000);
     try {
       if (!this.node) {
         console.error("Error on connectTo. Node is not initialized");
-        return undefined;
+        return;
       }
-      return await this.node.dial(ma, { signal });
-    } catch (err) {
-      console.error(
-        `Error on connectTo. Multiaddr: ${ma.toString()}. Error: ${err}`
-      );
-      return undefined;
+      await this.node.dial(ma, { signal });
+    } catch (error: unknown) {
+      if (error instanceof DialError) {
+        console.error(`Connection Error: ${error.message}`);
+      } else if (error instanceof Error) {
+        console.error(`General Error: ${error.message}`);
+      } else {
+        console.error("Unexpected error", error);
+      }
     }
   }
 
@@ -265,42 +269,42 @@ export class P2PClient extends EventEmitter {
   }
 
   async startNode(): Promise<void> {
-    this.node = await this.createNode();
-    this.registerProtocols();
-    await this.node.start();
-    this.localPeer = this.node.peerId.toString();
-    this.node.addEventListener("connection:open", (event: any) => {
-      this.emit("connection:open", event.detail);
-    });
-    this.node.addEventListener("connection:close", (event: any) => {
-      const conn: Connection = event.detail;
-      const peerId: PeerId = conn.remotePeer;
-      this.emit("connection:close", { peerId, conn });
-    });
-    this.node.addEventListener("peer:connect", (event: any) => {
-      const peerId = event.detail;
-      if (peerId) {
-        this.emit("peer:connect", peerId);
-      }
-    });
-    this.node.addEventListener("peer:disconnect", (event: any) => {
-      const peerId = event.detail;
-      if (peerId) {
-        this.emit("peer:disconnect", peerId);
-      }
-    });
-    this.node.addEventListener("peer:update", (event: any) => {
-      const protocols = event.detail.peer.protocols;
-      const peerId: PeerId = event.detail.peer.id;
-      if (protocols && peerId) {
-        this.emit("updateProtocols", { peerId, protocols });
-      }
-    });
-    this.node.addEventListener("start", (event: any) => {
-      console.log("Libp2p node started");
-    });
-
     try {
+      this.node = await this.createNode();
+      this.registerProtocols();
+
+      this.localPeer = this.node.peerId.toString();
+      this.node.addEventListener("connection:open", (event: any) => {
+        this.emit("connection:open", event.detail);
+      });
+      this.node.addEventListener("connection:close", (event: any) => {
+        const conn: Connection = event.detail;
+        const peerId: PeerId = conn.remotePeer;
+        this.emit("connection:close", { peerId, conn });
+      });
+      this.node.addEventListener("peer:connect", (event: any) => {
+        const peerId = event.detail;
+        if (peerId) {
+          this.emit("peer:connect", peerId);
+        }
+      });
+      this.node.addEventListener("peer:disconnect", (event: any) => {
+        const peerId = event.detail;
+        if (peerId) {
+          this.emit("peer:disconnect", peerId);
+        }
+      });
+      this.node.addEventListener("peer:update", (event: any) => {
+        const protocols = event.detail.peer.protocols;
+        const peerId: PeerId = event.detail.peer.id;
+        if (protocols && peerId) {
+          this.emit("updateProtocols", { peerId, protocols });
+        }
+      });
+      this.node.addEventListener("start", (event: any) => {
+        console.log("Libp2p node started");
+      });
+
       await this.node.start();
     } catch (err: any) {
       throw new Error(`Error on start client node - ${err}`);

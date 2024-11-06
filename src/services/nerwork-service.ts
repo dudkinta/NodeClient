@@ -80,9 +80,9 @@ export class NetworkService extends EventEmitter {
     return node;
   }
 
-  private async RequestConnect(addrr: string): Promise<Connection | undefined> {
+  private async RequestConnect(addrr: string): Promise<void> {
     const ma = multiaddr(addrr);
-    return await this.client.connectTo(ma);
+    await this.client.connectTo(ma);
   }
 
   private async RequestDisconnect(addrr: string): Promise<void> {

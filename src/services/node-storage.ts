@@ -1,9 +1,8 @@
 import { Node } from "../models/node.js";
 import ConfigLoader from "../helpers/config-loader.js";
-import { Connection } from "@libp2p/interface";
 import { isLocalAddress, isDirect } from "../helpers/check-ip.js";
 
-type RequestConnect = (addrr: string) => Promise<Connection | undefined>;
+type RequestConnect = (addrr: string) => Promise<void>;
 type RequestDisconnect = (addrr: string) => Promise<void>;
 type RequestRoles = (node: Node) => Promise<string[] | undefined>;
 
