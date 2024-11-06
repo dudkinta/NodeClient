@@ -56,3 +56,8 @@ export function isDirect(address: string): boolean {
     /^\/ip4\/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/[a-zA-Z0-9]+\/(\d{1,5})(\/ws)?(\/p2p\/[A-Za-z0-9]+)?$/;
   return regex.test(address);
 }
+
+export function isWEBRTC(address: string): boolean {
+  const regex = /^\/webrtc\/p2p\/[A-Za-z0-9]+$/;
+  return regex.test(address);
+}

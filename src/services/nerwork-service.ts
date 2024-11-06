@@ -82,12 +82,16 @@ export class NetworkService extends EventEmitter {
 
   private async RequestConnect(addrr: string): Promise<void> {
     const ma = multiaddr(addrr);
-    await this.client.connectTo(ma);
+    await this.client.connectTo(ma).catch((error) => {
+      console.error("Error in promise RequestConnect", error);
+    });
   }
 
   private async RequestDisconnect(addrr: string): Promise<void> {
     const ma = multiaddr(addrr);
-    this.client.disconnectFromMA(ma);
+    await this.client.disconnectFromMA(ma).catch((error) => {
+      console.error("Error in promise RequestDisconnect", error);
+    });
   }
   private async RequestRoles(node: Node): Promise<string[] | undefined> {
     if (!node.isConnect()) return undefined;
@@ -96,10 +100,12 @@ export class NetworkService extends EventEmitter {
         const connecton = node.getOpenedConnection();
         if (!connecton) return undefined;
 
-        const roleList = await this.client.askToConnection(
-          connecton,
-          this.config.protocols.ROLE
-        );
+        const roleList = await this.client
+          .askToConnection(connecton, this.config.protocols.ROLE)
+          .catch((error) => {
+            console.error("Error in promise RequestRoles", error);
+            return undefined;
+          });
         if (!roleList || roleList.length === 0) return undefined;
         return JSON.parse(roleList);
       } else {
@@ -118,10 +124,12 @@ export class NetworkService extends EventEmitter {
         const connecton = node.getOpenedConnection();
         if (!connecton) return undefined;
 
-        const addrrList = await this.client.askToConnection(
-          connecton,
-          this.config.protocols.MULTIADDRES
-        );
+        const addrrList = await this.client
+          .askToConnection(connecton, this.config.protocols.MULTIADDRES)
+          .catch((error) => {
+            console.error("Error in promise RequestMultiaddrrs", error);
+            return undefined;
+          });
         if (!addrrList || addrrList.length === 0) return undefined;
         return JSON.parse(addrrList);
       } else {
@@ -139,10 +147,12 @@ export class NetworkService extends EventEmitter {
       const connecton = node.getOpenedConnection();
       if (!connecton) return undefined;
 
-      const peerList = await this.client.askToConnection(
-        connecton,
-        this.config.protocols.PEER_LIST
-      );
+      const peerList = await this.client
+        .askToConnection(connecton, this.config.protocols.PEER_LIST)
+        .catch((error) => {
+          console.error("Error in promise RequestConnectedPeers", error);
+          return undefined;
+        });
       if (!peerList || peerList.length === 0 || peerList == `''`)
         return undefined;
       return JSON.parse(peerList);
@@ -155,7 +165,10 @@ export class NetworkService extends EventEmitter {
   private async RequestPing(addrr: string): Promise<number | undefined> {
     await this.lockerPing.acquire();
     try {
-      return await this.client.pingByAddress(addrr);
+      return await this.client.pingByAddress(addrr).catch((error) => {
+        console.error("Error in promise RequestPing", error);
+        return undefined;
+      });
     } finally {
       this.lockerPing.release();
     }

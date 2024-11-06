@@ -1,6 +1,6 @@
 import { Node } from "../models/node.js";
 import ConfigLoader from "../helpers/config-loader.js";
-import { isLocalAddress, isDirect } from "../helpers/check-ip.js";
+import { isLocalAddress, isDirect, isWEBRTC } from "../helpers/check-ip.js";
 
 type RequestConnect = (addrr: string) => Promise<void>;
 type RequestDisconnect = (addrr: string) => Promise<void>;
@@ -269,10 +269,14 @@ export class NodeStorage extends Map<string, Node> {
             }
           }
           if (node.roles.has(this.config.roles.NODE)) {
-            const lat = await this.requestPing(peerInfo.address);
-            console.log(`Strategy-> Node ping to ${peerInfo.address}: ${lat}`);
-            if (lat && lat < 10000 && this.nodeCount < this.maxNodeCount) {
-              await this.requestConnect(peerInfo.address);
+            if (!isWEBRTC(peerInfo.address)) {
+              const lat = await this.requestPing(peerInfo.address);
+              console.log(
+                `Strategy-> Node ping to ${peerInfo.address}: ${lat}`
+              );
+              if (lat && lat < 10000 && this.nodeCount < this.maxNodeCount) {
+                await this.requestConnect(peerInfo.address);
+              }
             }
           }
         });
