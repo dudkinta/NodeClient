@@ -84,16 +84,45 @@ export class P2PClient extends EventEmitter {
         console.log(`Received message from peer: ${peerId.toString()}`);
 
         const chatStream = byteStream(stream);
-        while (true) {
-          const buf = await chatStream.read();
-          console.log(`Received message string '${toString(buf.subarray())}'`);
+        try {
+          while (true) {
+            const buf = await chatStream.read();
+            if (buf == null) {
+              break; // Конец потока
+            }
+            console.log(
+              `Received message string '${toString(buf.subarray())}'`
+            );
+          }
+        } catch (err) {
+          console.error(`Error reading from chat stream: ${err}`);
+        } finally {
+          if (stream && stream.close) {
+            try {
+              await stream.close(); // Закрытие потока
+            } catch (closeErr) {
+              console.error(`Error closing chat stream: ${closeErr}`);
+            }
+          }
         }
       }
     );
 
     this.node.handle(this.config.protocols.ROLE, async ({ stream }: any) => {
       const ROLES = [this.config.roles.NODE];
-      await pipe([fromString(JSON.stringify(ROLES))], stream);
+      try {
+        await pipe([fromString(JSON.stringify(ROLES))], stream);
+      } catch (err) {
+        console.error(`Error writing to ROLE stream: ${err}`);
+      } finally {
+        if (stream && stream.close) {
+          try {
+            await stream.close(); // Закрытие потока
+          } catch (closeErr) {
+            console.error(`Error closing ROLE stream: ${closeErr}`);
+          }
+        }
+      }
     });
 
     this.node.handle(
@@ -105,7 +134,19 @@ export class P2PClient extends EventEmitter {
         const multiaddrs = this.node
           .getMultiaddrs()
           .map((ma: Multiaddr) => ma.toString());
-        await pipe([fromString(JSON.stringify(multiaddrs))], stream);
+        try {
+          await pipe([fromString(JSON.stringify(multiaddrs))], stream);
+        } catch (err) {
+          console.error(`Error writing to MULTIADDRES stream: ${err}`);
+        } finally {
+          if (stream && stream.close) {
+            try {
+              await stream.close(); // Закрытие потока
+            } catch (closeErr) {
+              console.error(`Error closing MULTIADDRES stream: ${closeErr}`);
+            }
+          }
+        }
       }
     );
 
@@ -120,8 +161,19 @@ export class P2PClient extends EventEmitter {
           peerId: conn.remotePeer.toString(),
           address: conn.remoteAddr.toString(),
         }));
-
-        await pipe([fromString(JSON.stringify(peerData))], stream);
+        try {
+          await pipe([fromString(JSON.stringify(peerData))], stream);
+        } catch (err) {
+          console.error(`Error writing to PEER_LIST stream: ${err}`);
+        } finally {
+          if (stream && stream.close) {
+            try {
+              await stream.close(); // Закрытие потока
+            } catch (closeErr) {
+              console.error(`Error closing PEER_LIST stream: ${closeErr}`);
+            }
+          }
+        }
       }
     );
   }
