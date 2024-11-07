@@ -204,9 +204,6 @@ export class NodeStorage extends Map<string, Node> {
         continue;
       }
 
-      console.log(
-        `---------------- Optimize for ${key} ----------------------------`
-      );
       const openAdresses = [...node.addresses.entries()].filter(
         (addrr) => addrr[1] && isDirect(addrr[0])
       );
@@ -232,9 +229,6 @@ export class NodeStorage extends Map<string, Node> {
           this.delete(key);
         }
       }
-      console.log(
-        `-----------------------------------------------------------------`
-      );
     }
   }
 
