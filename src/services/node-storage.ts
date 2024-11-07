@@ -255,11 +255,12 @@ export class NodeStorage extends Map<string, Node> {
                 return conn.remoteAddr.toString() === directAddress;
               }
             );
-            console.log(`Direct addresses ${directAddress}`);
-            console.log(
-              `Is connected direct address: ${isConnectedDirectAddress}`
-            );
+
             if (!isConnectedDirectAddress) {
+              console.log(`Direct addresses ${directAddress}`);
+              console.log(
+                `Is connected direct address: ${isConnectedDirectAddress}`
+              );
               console.log(`Add to ReconnectList: ${directAddress}`);
               this.reconnectList.set(key, directAddress);
               node.connections.forEach(async (conn) => {
