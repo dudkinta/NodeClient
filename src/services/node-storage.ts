@@ -1,9 +1,9 @@
 import { Node } from "../models/node.js";
 import ConfigLoader from "../helpers/config-loader.js";
 import { isLocalAddress, isDirect, isWEBRTC } from "../helpers/check-ip.js";
-import { error } from "console";
+import { Connection } from "@libp2p/interface";
 
-type RequestConnect = (addrr: string) => Promise<void>;
+type RequestConnect = (addrr: string) => Promise<Connection | undefined>;
 type RequestDisconnect = (addrr: string) => Promise<void>;
 type RequestRoles = (node: Node) => Promise<string[] | undefined>;
 
@@ -21,6 +21,9 @@ export class NodeStorage extends Map<string, Node> {
   private unknownCount: number = 0;
   private maxRelayCount: number = 2;
   private maxNodeCount: number = 20;
+  private penaltyNodes: string[] = [];
+  private localPeer: string | undefined;
+  private reconnectList: Map<string, string> = new Map();
   private config = ConfigLoader.getInstance().getConfig();
   private requestConnect: RequestConnect;
   private requestDisconnect: RequestDisconnect;
@@ -28,8 +31,7 @@ export class NodeStorage extends Map<string, Node> {
   private requestMultiaddrs: RequestMultiaddrs;
   private requestConnectedPeers: RequestConnectedPeers;
   private requestPing: RequestPing;
-  private penaltyNodes: string[] = [];
-  private localPeer: string | undefined;
+
   constructor(
     requestConnect: RequestConnect,
     requestDisconnect: RequestDisconnect,
@@ -48,41 +50,93 @@ export class NodeStorage extends Map<string, Node> {
   }
 
   set(key: string, value: Node): this {
-    super.set(key, value);
-    setTimeout(async () => {
-      await this.waitConnect(value);
-      if (value.isConnect()) {
-        await this.getRoles(value);
-        if (value.roles.size > 0) {
-          await this.getMultiaddrs(value);
-          await this.findPeer(value);
+    try {
+      super.set(key, value);
+      setTimeout(async () => {
+        await this.waitConnect(value).catch((error) => {
+          console.error(`Error in promise waitConnect: ${error}`);
+        });
+        if (value.isConnect()) {
+          await this.getRoles(value).catch((error) => {
+            console.error(`Error in promise getRoles: ${error}`);
+          });
+          if (value.roles.size > 0) {
+            await this.getMultiaddrs(value).catch((error) => {
+              console.error(`Error in promise getMultiaddrs: ${error}`);
+            });
+            await this.findPeer(value).catch((error) => {
+              console.error(`Error in promise findPeer: ${error}`);
+            });
+          }
         }
-      }
-    }, 0);
+      }, 0);
 
-    return this;
+      return this;
+    } catch (error) {
+      console.error(`Error in set: ${error}`);
+      return this;
+    }
   }
 
   async start(localPeer: string): Promise<void> {
-    this.localPeer = localPeer;
-    await this.counter();
-    setInterval(async () => {
-      await this.checkStatus();
-      await this.counter();
-    }, 10000);
+    try {
+      this.localPeer = localPeer;
+      await this.counter().catch((error) => {
+        console.error(`Error in promise counter: ${error}`);
+      });
+      setInterval(async () => {
+        await this.checkStatus().catch((error) => {
+          console.error(`Error in promise checkStatus: ${error}`);
+        });
+        await this.counter().catch((error) => {
+          console.error(`Error in promise counter: ${error}`);
+        });
+      }, 10000);
+    } catch (error) {
+      console.error(`Error in start: ${error}`);
+    }
   }
 
   private printUnknownNode(key: string, error: string) {
     console.log(`NetworkStrategy-> Unknown node: ${key} Error: ${error}`);
   }
 
-  private async counter() {
-    await this.counterByRoles();
-    //this.optimizeConnection();
-    this.counterByConnections();
+  private async counter(): Promise<void> {
+    try {
+      await this.counterByRoles().catch((error) => {
+        console.error(`Error in promise counterByRoles: ${error}`);
+      });
+      await this.optimizeConnection().catch((error) => {
+        console.error(`Error in promise optimizeConnection: ${error}`);
+      });
+      this.counterByConnections();
+      await this.reconnectDirect().catch((error) => {
+        console.error(`Error in promise reconnectDirect: ${error}`);
+      });
+    } catch (error) {
+      console.error(`Error in counter: ${error}`);
+    }
   }
 
-  private async counterByRoles() {
+  private async reconnectDirect(): Promise<void> {
+    for (const node of this.reconnectList) {
+      const conn = await this.requestConnect(node[1]).catch((error) => {
+        console.error(`Error in promise requestConnect: ${error}`);
+      });
+      if (conn) {
+        console.log(
+          `Reconnect to ${node[1]}: ConnectionStatus: ${conn?.status}`
+        );
+        if (conn.status == "open") {
+          console.log(`Reconnect to ${node[1]} is success`);
+          this.reconnectList.delete(node[0]);
+        }
+      } else {
+        console.error(`Reconnect to ${node[1]} is failed`);
+      }
+    }
+  }
+  private async counterByRoles(): Promise<void> {
     let rCount = 0;
     let nCount = 0;
     let uCount = 0;
@@ -133,12 +187,8 @@ export class NodeStorage extends Map<string, Node> {
       }
       node.connections.forEach((conn) => {
         if (isDirect(conn.remoteAddr.toString())) {
-          /*console.log(
-            `NetworkStrategy-> Direct connection: ${conn.remoteAddr.toString()}`
-          );*/
           directConnections++;
         } else {
-          //console.log(conn);
           relayConnections++;
         }
       });
@@ -148,27 +198,43 @@ export class NodeStorage extends Map<string, Node> {
     );
   }
 
-  private optimizeConnection() {
+  private async optimizeConnection(): Promise<void> {
     for (const [key, node] of this) {
       if (!node) {
         continue;
       }
-      if (!node.isConnect()) {
-        continue;
-      }
 
-      if (node.connections.size > 1) {
-        node.connections.forEach(async (conn) => {
-          if (conn.limits != undefined) {
-            console.log(`Request disconnect: ${conn.remoteAddr.toString()}`);
-            this.requestDisconnect(conn.remoteAddr.toString()).catch(
+      console.log(
+        `---------------- Optimize for ${key} ----------------------------`
+      );
+      const openAdresses = [...node.addresses.entries()].filter(
+        (addrr) => addrr[1] && isDirect(addrr[0])
+      );
+      if (openAdresses.length > 0) {
+        const directAddress = openAdresses[0][0];
+        const isConnectedDirectAddress = Array.from(node.connections).some(
+          (conn) => {
+            conn.remoteAddr.toString() == directAddress;
+          }
+        );
+        console.log(`Direct addresses ${directAddress}`);
+        console.log(`Is connected direct address: ${isConnectedDirectAddress}`);
+        if (!isConnectedDirectAddress) {
+          console.log(`Add to ReconnectList: ${directAddress}`);
+          this.reconnectList.set(key, directAddress);
+          node.connections.forEach(async (conn) => {
+            await this.requestDisconnect(conn.remoteAddr.toString()).catch(
               (error) => {
                 console.error(`Error in promise requestDisconnect: ${error}`);
               }
             );
-          }
-        });
+          });
+          this.delete(key);
+        }
       }
+      console.log(
+        `-----------------------------------------------------------------`
+      );
     }
   }
 
@@ -266,7 +332,8 @@ export class NodeStorage extends Map<string, Node> {
           if (
             peerInfo.peerId == node.peerId ||
             peerInfo.peerId == this.localPeer ||
-            this.has(peerInfo.peerId)
+            this.has(peerInfo.peerId) ||
+            this.reconnectList.has(peerInfo.peerId.toString())
           ) {
             return;
           }

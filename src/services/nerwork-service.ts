@@ -57,7 +57,9 @@ export class NetworkService extends EventEmitter {
       }
     });
 
-    await this.nodeStorage.start(this.localPeer.toString());
+    await this.nodeStorage.start(this.localPeer.toString()).catch((error) => {
+      console.error("Error in startAsync", error);
+    });
   }
 
   private getNode(
@@ -80,11 +82,13 @@ export class NetworkService extends EventEmitter {
     return node;
   }
 
-  private async RequestConnect(addrr: string): Promise<void> {
+  private async RequestConnect(addrr: string): Promise<Connection | undefined> {
     const ma = multiaddr(addrr);
-    await this.client.connectTo(ma).catch((error) => {
+    const conn = await this.client.connectTo(ma).catch((error) => {
       console.error("Error in promise RequestConnect", error);
+      return undefined;
     });
+    return conn;
   }
 
   private async RequestDisconnect(addrr: string): Promise<void> {

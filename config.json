@@ -1,8 +1,10 @@
 {
+  "listen": ["/ip4/0.0.0.0/tcp/"],
   "protocols": {
     "ROLE": "/chain/roles/1.0.0",
     "PEER_LIST": "/chain/peers/1.0.0",
     "CHAT": "/chain/chat/1.0.0",
+    "RECONNECT": "/chain/reconnect/1.0.0",
     "MULTIADDRES": "/chain/multiadres/1.0.0",
     "CIRCUIT_HOP": "/libp2p/circuit/relay/0.2.0/hop"
   },
