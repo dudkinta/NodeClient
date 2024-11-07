@@ -1,7 +1,6 @@
 import { EventEmitter } from "events";
 import { createLibp2p, Libp2p } from "libp2p";
 import type { Connection, PeerId } from "@libp2p/interface";
-import { DialError } from "@libp2p/interface";
 import { ping, PingService } from "@libp2p/ping";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
@@ -31,46 +30,54 @@ export class P2PClient extends EventEmitter {
     this.config = ConfigLoader.getInstance().getConfig();
   }
 
-  private async createNode(): Promise<Libp2p> {
-    const node = await createLibp2p({
-      start: false,
-      addresses: {
-        listen: [
-          "/ip4/0.0.0.0/tcp/0/ws", // IPv4 TCP, случайный порт
-          "/ip6/::/tcp/0/ws", // IPv6 TCP, случайный порт
-          "/p2p-circuit", // Relay
-          "/webrtc", // WebRTC
-        ],
-      },
-      transports: [
-        webSockets({
-          filter: filters.all,
-        }),
-        webRTC(),
-        circuitRelayTransport(),
-      ],
-      connectionGater: {
-        denyDialMultiaddr: () => {
-          return false;
+  private async createNode(): Promise<Libp2p | undefined> {
+    try {
+      const node = await createLibp2p({
+        start: false,
+        addresses: {
+          listen: [
+            "/ip4/0.0.0.0/tcp/0/ws", // IPv4 TCP, случайный порт
+            "/ip6/::/tcp/0/ws", // IPv6 TCP, случайный порт
+            "/p2p-circuit", // Relay
+            "/webrtc", // WebRTC
+          ],
         },
-      },
-      connectionEncrypters: [noise()],
-      streamMuxers: [yamux()],
-      services: {
-        aminoDHT: kadDHT({
-          clientMode: true,
-          protocol: "/ipfs/kad/1.0.0",
-          peerInfoMapper: removePrivateAddressesMapper,
-        }),
-        identify: identify(),
-        identifyPush: identifyPush(),
-        ping: ping(),
-      },
-      connectionManager: {
-        maxConnections: 20,
-      },
-    });
-    return node;
+        transports: [
+          webSockets({
+            filter: filters.all,
+          }),
+          webRTC(),
+          circuitRelayTransport(),
+        ],
+        connectionGater: {
+          denyDialMultiaddr: () => {
+            return false;
+          },
+        },
+        connectionEncrypters: [noise()],
+        streamMuxers: [yamux()],
+        services: {
+          aminoDHT: kadDHT({
+            clientMode: true,
+            protocol: "/ipfs/kad/1.0.0",
+            peerInfoMapper: removePrivateAddressesMapper,
+          }),
+          identify: identify(),
+          identifyPush: identifyPush(),
+          ping: ping(),
+        },
+        connectionManager: {
+          maxConnections: 20,
+        },
+      }).catch((error) => {
+        console.error(`Error during createLibp2p: ${error}`);
+        return undefined;
+      });
+      return node;
+    } catch (error) {
+      console.error(`Error during createLibp2p: ${error}`);
+      return undefined;
+    }
   }
 
   private registerProtocols(): void {
@@ -87,7 +94,9 @@ export class P2PClient extends EventEmitter {
         const chatStream = byteStream(stream);
         try {
           while (true) {
-            const buf = await chatStream.read();
+            const buf = await chatStream.read().catch((error: any) => {
+              console.error(`Error reading from chat stream: ${error}`);
+            });
             if (buf == null) {
               break; // Конец потока
             }
@@ -100,7 +109,9 @@ export class P2PClient extends EventEmitter {
         } finally {
           if (stream && stream.close) {
             try {
-              await stream.close(); // Закрытие потока
+              await stream.close().catch((error: any) => {
+                console.error(`Error during close stream: ${error}`);
+              }); // Закрытие потока
             } catch (closeErr) {
               console.error(`Error closing chat stream: ${closeErr}`);
             }
@@ -112,13 +123,19 @@ export class P2PClient extends EventEmitter {
     this.node.handle(this.config.protocols.ROLE, async ({ stream }: any) => {
       const ROLES = [this.config.roles.NODE];
       try {
-        await pipe([fromString(JSON.stringify(ROLES))], stream);
+        await pipe([fromString(JSON.stringify(ROLES))], stream).catch(
+          (error: any) => {
+            console.error(`Error writing to ROLE stream: ${error}`);
+          }
+        );
       } catch (err) {
         console.error(`Error writing to ROLE stream: ${err}`);
       } finally {
         if (stream && stream.close) {
           try {
-            await stream.close(); // Закрытие потока
+            await stream.close().catch((error: any) => {
+              console.error(`Error closing ROLE stream: ${error})`);
+            }); // Закрытие потока
           } catch (closeErr) {
             console.error(`Error closing ROLE stream: ${closeErr}`);
           }
@@ -136,13 +153,19 @@ export class P2PClient extends EventEmitter {
           .getMultiaddrs()
           .map((ma: Multiaddr) => ma.toString());
         try {
-          await pipe([fromString(JSON.stringify(multiaddrs))], stream);
+          await pipe([fromString(JSON.stringify(multiaddrs))], stream).catch(
+            (error: any) => {
+              console.error(`Error writing to MULTIADDRES stream: ${error}`);
+            }
+          );
         } catch (err) {
           console.error(`Error writing to MULTIADDRES stream: ${err}`);
         } finally {
           if (stream && stream.close) {
             try {
-              await stream.close(); // Закрытие потока
+              await stream.close().catch((error: any) => {
+                console.error(`Error closing MULTIADDRES stream: ${error}`);
+              }); // Закрытие потока
             } catch (closeErr) {
               console.error(`Error closing MULTIADDRES stream: ${closeErr}`);
             }
@@ -163,13 +186,19 @@ export class P2PClient extends EventEmitter {
           address: conn.remoteAddr.toString(),
         }));
         try {
-          await pipe([fromString(JSON.stringify(peerData))], stream);
+          await pipe([fromString(JSON.stringify(peerData))], stream).catch(
+            (error: any) => {
+              console.error(`Error writing to PEER_LIST stream: ${error}`);
+            }
+          );
         } catch (err) {
           console.error(`Error writing to PEER_LIST stream: ${err}`);
         } finally {
           if (stream && stream.close) {
             try {
-              await stream.close(); // Закрытие потока
+              await stream.close().catch((error: any) => {
+                console.error(`Error closing PEER_LIST stream: ${error}`);
+              }); // Закрытие потока
             } catch (closeErr) {
               console.error(`Error closing PEER_LIST stream: ${closeErr}`);
             }
@@ -186,8 +215,12 @@ export class P2PClient extends EventEmitter {
     try {
       const addr = multiaddr(peerAddress);
       const ping = this.node.services.ping as PingService;
-      return await ping.ping(addr);
+      return await ping.ping(addr).catch((error) => {
+        console.error(error);
+        return undefined;
+      });
     } catch (error) {
+      console.error(error);
       return undefined;
     }
   }
@@ -196,20 +229,13 @@ export class P2PClient extends EventEmitter {
     const signal = AbortSignal.timeout(5000);
     try {
       if (!this.node) {
-        console.error("Error on connectTo. Node is not initialized");
         return;
       }
       await this.node.dial(ma, { signal }).catch((error) => {
-        console.error(`Error during dial: ${error}`);
+        console.error(error);
       });
-    } catch (error: unknown) {
-      if (error instanceof DialError) {
-        console.error(`Connection Error: ${error.message}`);
-      } else if (error instanceof Error) {
-        console.error(`General Error: ${error.message}`);
-      } else {
-        console.error("Unexpected error", error);
-      }
+    } catch (error) {
+      console.error(error);
     }
   }
 
@@ -220,13 +246,10 @@ export class P2PClient extends EventEmitter {
     const signal = AbortSignal.timeout(5000);
     try {
       return await this.node.hangUp(ma, { signal }).catch((error) => {
-        console.error(`Error during disconnectFromMA: ${error}`);
+        console.error(error);
       });
-    } catch (err) {
-      console.error(
-        `Error on disconnectFrom. PeerId: ${ma.toString()}. Error: ${err}`
-      );
-      return;
+    } catch (error) {
+      console.error(error);
     }
   }
 
@@ -242,7 +265,7 @@ export class P2PClient extends EventEmitter {
       }
       // Создание нового потока
       stream = await conn.newStream(protocol).catch((error) => {
-        throw new Error(`Error during newStream: ${error}`);
+        console.error(`Error during newStream: ${error}`);
       });
 
       // Работа с потоком через pipe
@@ -253,7 +276,7 @@ export class P2PClient extends EventEmitter {
         }
         askResult = output;
       }).catch((error) => {
-        throw new Error(`Error during pipe: ${error}`);
+        console.error(`Error during pipe: ${error}`);
       });
 
       return askResult;
@@ -267,7 +290,7 @@ export class P2PClient extends EventEmitter {
       if (stream && stream.close) {
         try {
           await stream.close().catch((err: any) => {
-            throw new Error(`Error during close stream: ${err}`);
+            console.error(`Error during close stream: ${err}`);
           });
         } catch (closeErr) {
           console.error(
@@ -283,6 +306,10 @@ export class P2PClient extends EventEmitter {
   async startNode(): Promise<void> {
     try {
       this.node = await this.createNode();
+      if (!this.node) {
+        console.error("Node is not initialized");
+        return;
+      }
       this.registerProtocols();
 
       this.localPeer = this.node.peerId.toString();
