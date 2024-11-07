@@ -1,6 +1,7 @@
 import { Node } from "../models/node.js";
 import ConfigLoader from "../helpers/config-loader.js";
 import { isLocalAddress, isDirect, isWEBRTC } from "../helpers/check-ip.js";
+import { error } from "console";
 
 type RequestConnect = (addrr: string) => Promise<void>;
 type RequestDisconnect = (addrr: string) => Promise<void>;
@@ -111,7 +112,9 @@ export class NodeStorage extends Map<string, Node> {
     if (rCount == 0) {
       const relay = this.config.relay[0];
       const address = `/ip4/${relay.ADDRESS}/tcp/${relay.PORT}/ws/p2p/${relay.PEER}`;
-      await this.requestConnect(address);
+      await this.requestConnect(address).catch((error) => {
+        console.error(`Error in promise requestConnect: ${error}`);
+      });
     }
     console.log(
       `NetworkStrategy-> Relay count: ${this.relayCount}, Node count: ${this.nodeCount}, Unknown count: ${this.unknownCount}`
@@ -158,7 +161,11 @@ export class NodeStorage extends Map<string, Node> {
         node.connections.forEach(async (conn) => {
           if (conn.limits != undefined) {
             console.log(`Request disconnect: ${conn.remoteAddr.toString()}`);
-            this.requestDisconnect(conn.remoteAddr.toString());
+            this.requestDisconnect(conn.remoteAddr.toString()).catch(
+              (error) => {
+                console.error(`Error in promise requestDisconnect: ${error}`);
+              }
+            );
           }
         });
       }
@@ -235,7 +242,10 @@ export class NodeStorage extends Map<string, Node> {
 
   private async getRoles(node: Node): Promise<void> {
     let roles: string[] | undefined;
-    roles = await this.requestRoles(node);
+    roles = await this.requestRoles(node).catch((error) => {
+      console.error(`Error in promise getRoles: ${error}`);
+      return undefined;
+    });
     if (roles != undefined) {
       roles.forEach((role) => {
         node.roles.add(role);
@@ -245,7 +255,12 @@ export class NodeStorage extends Map<string, Node> {
 
   private async findPeer(node: Node): Promise<void> {
     if (node.protocols.has(this.config.protocols.PEER_LIST)) {
-      const connectedPeers = await this.requestConnectedPeers(node);
+      const connectedPeers = await this.requestConnectedPeers(node).catch(
+        (error) => {
+          console.error(`Error in promise requestConnectedPeers: ${error}`);
+          return undefined;
+        }
+      );
       if (connectedPeers) {
         connectedPeers.forEach(async (peerInfo: any) => {
           if (
@@ -263,19 +278,31 @@ export class NodeStorage extends Map<string, Node> {
               .getOpenedConnection()!
               .remoteAddr.toString();
             const fullAddress = `${relayAddress}/p2p-circuit/webrtc/p2p/${peerInfo.peerId}`;
-            const lat = await this.requestPing(fullAddress);
+            const lat = await this.requestPing(fullAddress).catch((error) => {
+              console.error(`Error in promise requestPing: ${error}`);
+              return undefined;
+            });
             if (lat && lat < 10000 && this.nodeCount < this.maxNodeCount) {
-              await this.requestConnect(fullAddress);
+              await this.requestConnect(fullAddress).catch((error) => {
+                console.error(`Error in promise requestConnect: ${error}`);
+              });
             }
           }
           if (node.roles.has(this.config.roles.NODE)) {
             if (!isWEBRTC(peerInfo.address)) {
-              const lat = await this.requestPing(peerInfo.address);
+              const lat = await this.requestPing(peerInfo.address).catch(
+                (error) => {
+                  console.error(`Error in promise requestPing: ${error}`);
+                  return undefined;
+                }
+              );
               console.log(
                 `Strategy-> Node ping to ${peerInfo.address}: ${lat}`
               );
               if (lat && lat < 10000 && this.nodeCount < this.maxNodeCount) {
-                await this.requestConnect(peerInfo.address);
+                await this.requestConnect(peerInfo.address).catch((error) => {
+                  console.error(`Error in promise requestConnect: ${error}`);
+                });
               }
             }
           }
@@ -291,9 +318,12 @@ export class NodeStorage extends Map<string, Node> {
       node.roles.has(this.config.roles.NODE)
     ) {
       let multiaddrs: string[] | undefined;
-      while (multiaddrs == undefined) {
-        multiaddrs = await this.requestMultiaddrs(node);
-        if (multiaddrs != undefined) {
+      while (!multiaddrs) {
+        multiaddrs = await this.requestMultiaddrs(node).catch((error) => {
+          console.error(`Error in promise getMultiaddrs: ${error}`);
+          return undefined;
+        });
+        if (multiaddrs) {
           multiaddrs.forEach((multiaddr) => {
             if (multiaddr && !node.addresses.has(multiaddr)) {
               node.addresses.set(multiaddr, false);
@@ -315,15 +345,26 @@ export class NodeStorage extends Map<string, Node> {
         if (isAvailable) {
           continue;
         }
-        if (isLocalAddress(address) || address.includes("p2p-circuit")) {
+        if (
+          isLocalAddress(address) ||
+          address.includes("p2p-circuit") ||
+          isWEBRTC(address)
+        ) {
           continue;
         }
-        const lat = await this.requestPing(address);
-        console.log(
-          `Strategy-> Node directPing (${node.peerId?.toString()}) to ${address}: ${lat}`
-        );
-        if (lat && lat < 10000) {
-          node.addresses.set(address, true);
+        try {
+          const lat = await this.requestPing(address).catch((error) => {
+            console.error(`Error in promise checkDirectAddress: ${error}`);
+            return undefined;
+          });
+          console.log(
+            `Strategy-> Node directPing (${node.peerId?.toString()}) to ${address}: ${lat}`
+          );
+          if (lat && lat < 10000) {
+            node.addresses.set(address, true);
+          }
+        } catch (error) {
+          console.error(`Error in checkDirectAddress: ${error}`);
         }
       }
     }
