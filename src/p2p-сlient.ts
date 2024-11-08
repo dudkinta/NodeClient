@@ -1,7 +1,7 @@
 import { EventEmitter } from "events";
 import { createLibp2p, Libp2p } from "libp2p";
-import type { Connection, PeerId } from "@libp2p/interface";
-import { ping, PingService } from "@libp2p/ping";
+import { TimeoutError, type Connection, type PeerId } from "@libp2p/interface";
+import { ping, PingService } from "./services/ping/index.js";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { webRTC } from "@libp2p/webrtc";
@@ -188,16 +188,21 @@ export class P2PClient extends EventEmitter {
 
   async pingByAddress(peerAddress: string): Promise<number> {
     if (!this.node) {
-      return 1000000;
+      throw new Error("Node is not initialized for ping");
     }
     try {
       const addr = multiaddr(peerAddress);
       const ping = this.node.services.ping as PingService;
-      const latency = await ping.ping(addr);
+      const latency = await ping.ping(addr, {
+        signal: AbortSignal.timeout(5000),
+      });
       return latency;
     } catch (error) {
       console.error("Ошибка при пинге:", error);
-      return 100000;
+      if (error instanceof TimeoutError) {
+        console.error("Ошибка таймаута при пинге:", error);
+      }
+      throw error;
     }
   }
 

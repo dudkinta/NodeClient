@@ -217,14 +217,14 @@ export class NetworkService extends EventEmitter {
 
   private async RequestPing(addrr: string): Promise<number | undefined> {
     try {
-      await this.lockerPing.acquire();
+      //await this.lockerPing.acquire();
       try {
         return await this.client.pingByAddress(addrr).catch((error) => {
           console.error("Error in promise RequestPing", error);
           return undefined;
         });
       } finally {
-        this.lockerPing.release();
+        //this.lockerPing.release();
       }
     } catch (error) {
       console.error("Error in RequestPing", error);

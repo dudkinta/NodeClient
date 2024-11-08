@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node --loader ts-node/esm ./src/index.ts",
     "build": "npx tsc",
-    "serve": "npx tsc && node dist/index.js"
+    "serve": "set DEBUG=libp2p:ping npx tsc && node dist/index.js"
   },
   "keywords": [],
   "author": "",
@@ -30,7 +30,6 @@
     "@libp2p/identify": "^3.0.10",
     "@libp2p/kad-dht": "^14.1.0",
     "@libp2p/peer-id": "^5.0.7",
-    "@libp2p/ping": "^2.0.10",
     "@libp2p/webrtc": "^5.0.16",
     "@libp2p/websockets": "^9.0.11",
     "@multiformats/multiaddr": "^12.3.1",

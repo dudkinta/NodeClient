@@ -520,7 +520,7 @@ export class NodeStorage extends Map<string, Node> {
               continue;
             }
             const lat = await this.requestPing(address).catch((error) => {
-              console.error(`Error in promise checkDirectAddress: ${error}`);
+              console.error(`Error in promise requestPing: ${error}`);
               return undefined;
             });
             console.log(
